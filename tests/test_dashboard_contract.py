@@ -21,7 +21,7 @@ def test_empty_state_returns_contract_shape(web_client):
     assert set(body["modules"].keys()) == set(SCORING_MODULES)
     for m in SCORING_MODULES:
         assert body["modules"][m]["status"] == "unavailable"
-    assert "not financial advice" in body["disclaimer"].lower()  # FR-39
+    assert "not personalized investment advice" in body["disclaimer"].lower()  # FR-39
 
 
 def test_full_snapshot_has_all_modules_and_breakdown(web_client, store):
@@ -85,6 +85,8 @@ def test_unknown_ticker_is_404_sector_not_covered(web_client):
 
 
 def test_disclaimer_header_on_every_response(web_client):
-    """FR-39: disclaimer accompanies every API response."""
+    """FR-39: disclaimer accompanies every API response (ASCII rendering in header)."""
     r = web_client.get("/healthz")
-    assert "not financial advice" in r.headers["X-Disclaimer"].lower()
+    header = r.headers["X-Disclaimer"]
+    assert "not personalized investment advice" in header.lower()
+    header.encode("latin-1")  # must be header-safe

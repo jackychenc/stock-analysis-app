@@ -116,7 +116,7 @@ Golden fixtures cover all edges. **Encoded by A3 in domain-contract v1.2.2 §6.*
 | ID | Requirement | Priority | Deck ref |
 |----|-------------|----------|----------|
 | FR-38 | The app SHALL present a "past ≠ future" / methodology caveat wherever backtest or projected figures appear. | M | §14 R-03 |
-| **FR-39** | The app SHALL display a **persistent in-app disclaimer**: "Not financial advice. …" on all recommendation surfaces (decision-support, not advice). | M | §7 (FR-39) |
+| **FR-39** | The app SHALL display a **persistent, non-hideable in-app disclaimer** on all recommendation surfaces (delivered via `disclaimer` payload field + `X-Disclaimer` response header per contract). **Canonical v1 wording (A8-provided 2026-07-08, for A4 to bind):** *"For personal decision-support and educational use only. Not personalized investment advice, and not a solicitation or recommendation to buy or sell any security. Not provided by a registered investment adviser (US Investment Advisers Act) / 證券投資顧問事業 (Taiwan). Signals, scores and target prices are model outputs; past performance and backtests are hypothetical and do not guarantee future results. You are solely responsible for your own decisions — consult a licensed adviser."* Attorney sign-off required before any distribution/monetization/multi-user step (A8, REG-01/R-07). | M | §7 (FR-39) |
 
 ---
 ### Reserved / cross-references

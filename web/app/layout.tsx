@@ -6,9 +6,11 @@ export const metadata: Metadata = {
   description: "Five-lens decision support. Not financial advice.",
 };
 
+// A4 pattern: concise always-visible line; full canonical FR-39 text on tap
+// (full text ships with the dashboard UI in roadmap Step 8).
 const DISCLAIMER =
-  "Personal decision-support only — not financial advice. " +
-  "Past performance does not guarantee future results.";
+  "For personal decision-support & educational use only — not investment " +
+  "advice; model outputs, not from a registered adviser. Full disclaimer ›";
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
