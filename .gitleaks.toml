@@ -1,7 +1,6 @@
 # gitleaks config — stock-analysis-app (owner: A7 DevOps, P1-SEC-2 / task #7)
-# Place at REPO ROOT. gitleaks-action@v2 auto-detects it.
-# Extends the default ruleset; adds an allowlist for test-only fixtures so the
-# CI `security` job is not failed by non-secrets.
+# Scope narrowed per A8 review 2026-07-08: allow ONLY the reviewed test dummy
+# and .env.example placeholders; test fixtures otherwise remain scanned.
 
 title = "stock-analysis-app gitleaks config"
 
@@ -9,14 +8,10 @@ title = "stock-analysis-app gitleaks config"
 useDefault = true
 
 [allowlist]
-description = "Test-only constants — not real credentials (verified A7 2026-07-08)"
-# Deterministic dummy JWT secret used only to satisfy the >=32-byte fail-closed
-# boot check inside the test suite (tests/conftest.py TEST_JWT_SECRET).
+description = "Test-only non-secrets (reviewed A8 2026-07-08)"
 paths = [
-  '''tests/conftest\.py''',
   '''\.env\.example''',
 ]
 regexes = [
-  '''0123456789abcdef''',
-  '''test-secret''',
+  '''(0123456789abcdef){4}''',  # TEST_JWT_SECRET dummy (tests/conftest.py) — exact 64-hex, not real
 ]
