@@ -83,6 +83,20 @@ export const CALL_LABELS: Record<Recommendation["composite_call"], string> = {
   SUPPRESSED: "No recommendation",
 };
 
+/** A4 redline F1: the CALL glyph/color derive from composite_call, never from
+ * the sign of composite_signal — a Hold must read neutral, not bullish. */
+export const CALL_RENDER: Record<
+  Recommendation["composite_call"],
+  { icon: string; color: string }
+> = {
+  STRONG_BUY: { icon: "▲▲", color: "var(--sig-sb)" },
+  BUY: { icon: "▲", color: "var(--sig-b)" },
+  HOLD: { icon: "▬", color: "var(--sig-hold)" },
+  SELL: { icon: "▼", color: "var(--sig-s)" },
+  STRONG_SELL: { icon: "▼▼", color: "var(--sig-ss)" },
+  SUPPRESSED: { icon: "", color: "var(--sub)" },
+};
+
 export function fmtSigned(n: number, digits = 2): string {
   return `${n >= 0 ? "+" : ""}${n.toFixed(digits)}`;
 }

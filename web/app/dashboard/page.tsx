@@ -9,6 +9,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import {
   CALL_LABELS,
+  CALL_RENDER,
   Dashboard,
   fmtSigned,
   MODULE_LABELS,
@@ -185,7 +186,7 @@ function DashboardView({ data }: { data: Dashboard }) {
             {rec.confidence_level && (
               <span
                 className="rounded-lg px-2.5 py-1 text-xs font-semibold num"
-                style={{ background: "var(--conf-hi-bg)", color: "var(--conf-hi-ink)" }}
+                style={confidenceBadgeStyle(rec.confidence_level)}
               >
                 Confidence: {rec.confidence_level}
                 {rec.confidence_pct !== null && ` ${trimPct(rec.confidence_pct)}%`}
@@ -196,13 +197,14 @@ function DashboardView({ data }: { data: Dashboard }) {
 
         <div className="mt-4 flex flex-wrap items-center gap-6">
           <div>
+            {/* F1: glyph/color from the CALL, not the signal's sign */}
             <div
               className="text-xl font-bold"
-              style={{ color: suppressed ? "var(--sub)" : signalColorVar(rec.composite_signal) }}
+              style={{ color: CALL_RENDER[rec.composite_call].color }}
               data-testid="call-label"
             >
-              {!suppressed && (
-                <span aria-hidden>{signalIcon(rec.composite_signal)}&nbsp;</span>
+              {CALL_RENDER[rec.composite_call].icon && (
+                <span aria-hidden>{CALL_RENDER[rec.composite_call].icon}&nbsp;</span>
               )}
               {CALL_LABELS[rec.composite_call]}
             </div>
@@ -356,7 +358,9 @@ function LensCard({
       {entry && (
         <div className="mt-2 text-[10.5px]" style={{ color: "var(--sub)" }}>
           weight {entry.weight_assigned.toFixed(2)}
-          {renormalised && (
+          {/* F3: show "→ effective" only for a genuine renormalisation
+              (never when effective equals assigned or is a 0 data anomaly) */}
+          {renormalised && entry.weight_effective > 0 && (
             <>
               {" "}→ <span className="num font-semibold">{entry.weight_effective.toFixed(4)}</span> effective
             </>
@@ -370,4 +374,11 @@ function LensCard({
 
 function trimPct(pct: number): string {
   return Number.isInteger(pct) ? String(pct) : pct.toFixed(2);
+}
+
+/** A4 polish: LOW must not reuse the positive green style. */
+function confidenceBadgeStyle(level: "HIGH" | "MEDIUM" | "LOW"): React.CSSProperties {
+  if (level === "HIGH") return { background: "var(--conf-hi-bg)", color: "var(--conf-hi-ink)" };
+  if (level === "MEDIUM") return { background: "var(--amber-bg)", color: "var(--amber)" };
+  return { background: "var(--line-2)", color: "var(--sub)" };
 }
