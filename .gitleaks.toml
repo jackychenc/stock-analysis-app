@@ -1,6 +1,12 @@
 # gitleaks config — stock-analysis-app (owner: A7 DevOps, P1-SEC-2 / task #7)
-# Scope narrowed per A8 review 2026-07-08: allow ONLY the reviewed test dummy
-# and .env.example placeholders; test fixtures otherwise remain scanned.
+# Place at REPO ROOT. gitleaks-action@v2 auto-detects it.
+# Extends the default ruleset. Minimal allowlist per A8 review:
+#  - value-anchored regex for the ONE dummy test constant (keeps every file,
+#    incl. tests/conftest.py, fully scanned for any real secret).
+#  - .env.example (names/placeholders only, by design).
+# NB: gitleaks scans SOURCE text — conftest.py literal is "0123456789abcdef"
+#     ONCE (`* 4` is runtime Python), so the regex is the exact 16-hex string,
+#     not a {4} repeat.
 
 title = "stock-analysis-app gitleaks config"
 
@@ -8,10 +14,10 @@ title = "stock-analysis-app gitleaks config"
 useDefault = true
 
 [allowlist]
-description = "Test-only non-secrets (reviewed A8 2026-07-08)"
-paths = [
-  '''\.env\.example''',
-]
+description = "Minimal: one dummy test constant + env template (verified A7 2026-07-08)"
 regexes = [
-  '''(0123456789abcdef){4}''',  # TEST_JWT_SECRET dummy (tests/conftest.py) — exact 64-hex, not real
+  '''0123456789abcdef''',   # TEST_JWT_SECRET dummy in tests/conftest.py:18 — fixed obvious non-secret
+]
+paths = [
+  '''\.env\.example$''',    # variable names/placeholders only, git-tracked template
 ]
