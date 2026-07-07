@@ -31,6 +31,30 @@ class Settings(BaseSettings):
     # Key Vault in a future cloud phase (KeyProvider abstraction, ADR-004).
     app_encryption_key: str = ""
 
+    # FR-39: compliance-owned config (A8) — wording changes are a config
+    # change, not a contract change. Default = canonical v1 (SRS v0.2.4).
+    # Env-overridable via DISCLAIMER_TEXT.
+    disclaimer_text: str = (
+        "For personal decision-support and educational use only. Not personalized "
+        "investment advice, and not a solicitation or recommendation to buy or sell "
+        "any security. Not provided by a registered investment adviser (US Investment "
+        "Advisers Act) / 證券投資顧問事業 (Taiwan). Signals, scores and target prices "
+        "are model outputs; past performance and backtests are hypothetical and do "
+        "not guarantee future results. You are solely responsible for your own "
+        "decisions — consult a licensed adviser."
+    )
+
+    def disclaimer_header_value(self) -> str:
+        """HTTP headers are latin-1 (RFC 9110; Starlette enforces): the one
+        non-ASCII term is rendered by its official English translation."""
+        return (
+            self.disclaimer_text
+            .replace("證券投資顧問事業", "Securities Investment Consulting Enterprise")
+            .replace("—", "-")
+            .encode("latin-1", "replace")
+            .decode("latin-1")
+        )
+
     def dsn(self) -> str:
         return self.database_url.replace("postgresql+psycopg://", "postgresql://")
 

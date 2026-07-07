@@ -11,6 +11,7 @@ from typing import Any
 
 import asyncpg
 
+from app.core.config import get_settings
 from app.schemas.contracts import (
     SCORING_MODULES,
     Dashboard,
@@ -92,6 +93,7 @@ async def fetch_dashboard(conn: asyncpg.Connection, ticker: asyncpg.Record) -> D
         rec_date=row["rec_date"],
         recommendation=rec,
         modules=DashboardModules(**summaries),
+        disclaimer=get_settings().disclaimer_text,  # FR-39: config-sourced
     )
 
 
@@ -106,6 +108,7 @@ def _empty_dashboard(full_symbol: str) -> Dashboard:
             technical=unavailable, fundamental=unavailable,
             chip=unavailable, news=unavailable,
         ),
+        disclaimer=get_settings().disclaimer_text,  # FR-39: config-sourced
     )
 
 

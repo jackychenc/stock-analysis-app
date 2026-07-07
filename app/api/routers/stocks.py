@@ -91,9 +91,11 @@ async def backtest(
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await _covered_ticker_or_404(conn, ticker)
+    settings = get_settings()
     return BacktestResult(
         window_months=window_months,
         benchmark=read_service.benchmark_for(row["exchange"]),
         insufficient_history=True,
-        methodology_version=get_settings().methodology_version,
+        methodology_version=settings.methodology_version,
+        disclaimer=settings.disclaimer_text,  # FR-39: config-sourced
     )

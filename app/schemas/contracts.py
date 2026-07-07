@@ -19,22 +19,11 @@ from pydantic import BaseModel, Field
 
 SCORING_MODULES = ("technical", "fundamental", "chip", "news")
 
-# FR-39 canonical v1 wording (A8-provided 2026-07-08, SRS v0.2.3).
-DISCLAIMER = (
-    "For personal decision-support and educational use only. Not personalized "
-    "investment advice, and not a solicitation or recommendation to buy or sell "
-    "any security. Not provided by a registered investment adviser (US Investment "
-    "Advisers Act) / 證券投資顧問事業 (Taiwan). Signals, scores and target prices "
-    "are model outputs; past performance and backtests are hypothetical and do "
-    "not guarantee future results. You are solely responsible for your own "
-    "decisions — consult a licensed adviser."
-)
+# FR-39: the served value is compliance-owned config (Settings.disclaimer_text,
+# A3 ruling) — this mirror exists only as the pydantic model default.
+from app.core.config import get_settings  # noqa: E402
 
-# HTTP headers must be latin-1: same text with the one non-ASCII term rendered
-# by its official English translation. Payload carries the canonical original.
-DISCLAIMER_ASCII = DISCLAIMER.replace(
-    "證券投資顧問事業", "Securities Investment Consulting Enterprise"
-).replace("—", "-")
+DISCLAIMER = get_settings().disclaimer_text
 
 
 class ModuleStatus(StrEnum):
