@@ -38,7 +38,9 @@ export default function LoginPage() {
 
   return (
     <div className="flex flex-col items-center pt-20">
-      <div className="card w-full max-w-sm p-8" style={{ borderRadius: "var(--r-hero)" }}>
+      {/* A4 redline: fluid on mobile — never clips at 390px */}
+      <div className="card p-6 sm:p-8"
+        style={{ borderRadius: "var(--r-hero)", width: "min(100% - 32px, 420px)" }}>
         <h1 className="text-xl font-extrabold">Stock Investment Analysis</h1>
         <p className="mt-1 text-sm" style={{ color: "var(--sub)" }}>
           Five lenses, one explainable daily call.

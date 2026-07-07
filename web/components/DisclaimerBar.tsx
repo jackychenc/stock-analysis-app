@@ -22,14 +22,15 @@ export default function DisclaimerBar({ fullText }: { fullText?: string }) {
   return (
     <footer className="fixed inset-x-0 bottom-0 z-50 border-t bg-white/95 backdrop-blur"
       style={{ borderColor: "var(--line)" }}>
+      {/* A4 redline: #334155 keeps WCAG AA >=4.5:1 on the translucent bar */}
       {expanded && (
         <div className="mx-auto max-w-5xl px-4 pt-3 text-xs leading-relaxed"
-          style={{ color: "var(--sub)" }} data-testid="disclaimer-full">
+          style={{ color: "#334155" }} data-testid="disclaimer-full">
           {canonical}
         </div>
       )}
-      <div className="mx-auto flex max-w-5xl items-center justify-center gap-2 px-4 py-2 text-center text-xs"
-        style={{ color: "var(--sub)" }}>
+      <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-center gap-2 px-4 py-2 text-center text-xs"
+        style={{ color: "#334155" }}>
         <span>
           For personal decision-support &amp; educational use only — not investment
           advice; model outputs, not from a registered adviser.
