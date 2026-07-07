@@ -20,10 +20,11 @@ from pydantic import BaseModel, Field
 SCORING_MODULES = ("technical", "fundamental", "chip", "news")
 
 # FR-39: the served value is compliance-owned config (Settings.disclaimer_text,
-# A3 ruling) — this mirror exists only as the pydantic model default.
+# A3 ruling; ASCII-only per A8 final) — this mirror is the pydantic model default.
 from app.core.config import get_settings  # noqa: E402
 
 DISCLAIMER = get_settings().disclaimer_text
+DISCLAIMER_VERSION = get_settings().disclaimer_version
 
 
 class ModuleStatus(StrEnum):
@@ -97,6 +98,7 @@ class Dashboard(BaseModel):
     modules: DashboardModules
     supply_chain_available: bool = False
     disclaimer: str = DISCLAIMER  # FR-39: server includes disclaimer in payload
+    disclaimer_version: str = DISCLAIMER_VERSION  # audit trace (criterion 7)
 
 
 class ModuleDetail(BaseModel):
@@ -140,6 +142,7 @@ class BacktestResult(BaseModel):
     insufficient_history: bool = True
     methodology_version: str
     disclaimer: str = DISCLAIMER
+    disclaimer_version: str = DISCLAIMER_VERSION
 
 
 class DecisionAnnotation(BaseModel):

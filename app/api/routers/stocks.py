@@ -98,4 +98,5 @@ async def backtest(
         insufficient_history=True,
         methodology_version=settings.methodology_version,
         disclaimer=settings.disclaimer_text,  # FR-39: config-sourced
+        disclaimer_version=settings.disclaimer_version,
     )

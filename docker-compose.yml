@@ -33,13 +33,13 @@ services:
   api:
     build: { context: ., dockerfile: Dockerfile }
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    # F-1 fix: secrets load via env_file (literal, no ${} interpolation) —
+    # compose interpolation corrupts $-delimited values like the pbkdf2
+    # ADMIN_PASSWORD_HASH. The app fail-closes on missing/weak JWT_SECRET.
+    env_file: [.env]
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-stockapp}:${POSTGRES_PASSWORD:-stockapp}@db:5432/${POSTGRES_DB:-stockapp}
       REDIS_URL: redis://redis:6379/0
-      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?set APP_ENCRYPTION_KEY in .env}  # pgcrypto key (NFR-05)
-      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
-      ADMIN_USERNAME: ${ADMIN_USERNAME:?set ADMIN_USERNAME in .env}
-      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:?set ADMIN_PASSWORD_HASH in .env}
       ENV: local
     ports: ["127.0.0.1:8000:8000"]
     depends_on:
@@ -50,10 +50,10 @@ services:
     build: { context: ., dockerfile: Dockerfile }
     # APScheduler runs daily 03:00 TW; POST /pipeline/run-now triggers on demand.
     command: python -m app.batch.scheduler
+    env_file: [.env]
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-stockapp}:${POSTGRES_PASSWORD:-stockapp}@db:5432/${POSTGRES_DB:-stockapp}
       REDIS_URL: redis://redis:6379/0
-      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?set APP_ENCRYPTION_KEY in .env}
       ENV: local
     depends_on:
       db: { condition: service_healthy }

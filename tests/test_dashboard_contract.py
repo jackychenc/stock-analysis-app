@@ -22,6 +22,7 @@ def test_empty_state_returns_contract_shape(web_client):
     for m in SCORING_MODULES:
         assert body["modules"][m]["status"] == "unavailable"
     assert "not personalized investment advice" in body["disclaimer"].lower()  # FR-39
+    assert body["disclaimer_version"] == "fr39-v1"  # criterion 7 audit trace
 
 
 def test_full_snapshot_has_all_modules_and_breakdown(web_client, store):
@@ -85,8 +86,15 @@ def test_unknown_ticker_is_404_sector_not_covered(web_client):
 
 
 def test_disclaimer_header_on_every_response(web_client):
-    """FR-39: disclaimer accompanies every API response (ASCII rendering in header)."""
+    """FR-39 criterion 6 (A8 final): payload == header == canonical, ASCII-only."""
+    from app.core.config import get_settings
+
+    canonical = get_settings().disclaimer_text
+    canonical.encode("ascii")  # canonical must be pure ASCII (header-safe)
+
     r = web_client.get("/healthz")
-    header = r.headers["X-Disclaimer"]
-    assert "not personalized investment advice" in header.lower()
-    header.encode("latin-1")  # must be header-safe
+    assert r.headers["X-Disclaimer"] == canonical  # byte-identical
+    assert r.headers["X-Disclaimer-Version"] == get_settings().disclaimer_version
+
+    dash = web_client.get("/api/v1/stocks/2330.TW/dashboard")
+    assert dash.json()["disclaimer"] == canonical  # payload == header == canonical

@@ -94,6 +94,7 @@ async def fetch_dashboard(conn: asyncpg.Connection, ticker: asyncpg.Record) -> D
         recommendation=rec,
         modules=DashboardModules(**summaries),
         disclaimer=get_settings().disclaimer_text,  # FR-39: config-sourced
+        disclaimer_version=get_settings().disclaimer_version,
     )
 
 
@@ -109,6 +110,7 @@ def _empty_dashboard(full_symbol: str) -> Dashboard:
             chip=unavailable, news=unavailable,
         ),
         disclaimer=get_settings().disclaimer_text,  # FR-39: config-sourced
+        disclaimer_version=get_settings().disclaimer_version,
     )
 
 

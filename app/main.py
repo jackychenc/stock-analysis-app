@@ -31,13 +31,22 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    header_disclaimer = settings.disclaimer_header_value()
+    # FR-39 criterion 6: header == payload, byte-identical. Canonical text is
+    # ASCII-only by A8 ruling; fail fast if a config override breaks that.
+    try:
+        settings.disclaimer_text.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise RuntimeError(
+            "DISCLAIMER_TEXT must be ASCII-only (FR-39 criterion 6: payload =="
+            " X-Disclaimer header, and HTTP headers are latin-1)."
+        ) from exc
 
     @app.middleware("http")
     async def disclaimer_header(request: Request, call_next):
         """FR-39: the disclaimer accompanies every API response."""
         response = await call_next(request)
-        response.headers["X-Disclaimer"] = header_disclaimer
+        response.headers["X-Disclaimer"] = settings.disclaimer_text
+        response.headers["X-Disclaimer-Version"] = settings.disclaimer_version
         return response
 
     @app.exception_handler(Exception)
