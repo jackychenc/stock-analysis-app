@@ -173,7 +173,8 @@ def make_recommendation(ticker_id: int = 1, *, unavailable: tuple[str, ...] = ()
     return {
         "ticker_id": ticker_id,
         "rec_date": date(2026, 7, 7),
-        "composite_signal": 0.0 if suppressed else 0.94,
+        # Contract v1.1+ (ck_rec_suppressed_shape): NULL iff SUPPRESSED.
+        "composite_signal": None if suppressed else 0.94,
         "composite_call": "SUPPRESSED" if suppressed else "BUY",
         "target_price_bear": None if suppressed else 850.0,
         "target_price_base": None if suppressed else 1000.0,

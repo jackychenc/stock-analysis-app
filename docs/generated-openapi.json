@@ -918,6 +918,19 @@
           "status": {
             "$ref": "#/components/schemas/ModuleStatus"
           },
+          "signal_score": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 2.0,
+                "minimum": -2.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signal Score"
+          },
           "as_of": {
             "anyOf": [
               {
@@ -945,7 +958,8 @@
           "module",
           "status"
         ],
-        "title": "ModuleDetail"
+        "title": "ModuleDetail",
+        "description": "Base lens-detail envelope (contract v1.2.1); per-lens extended fields\n(TechnicalDetail latest/series, FundamentalDetail ratios, ...) are filled\nby the ingestion steps (tasks #8/#9/#12)."
       },
       "ModuleStatus": {
         "type": "string",
@@ -1153,9 +1167,16 @@
       "Recommendation": {
         "properties": {
           "composite_signal": {
-            "type": "number",
-            "maximum": 2.0,
-            "minimum": -2.0,
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 2.0,
+                "minimum": -2.0
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Composite Signal"
           },
           "composite_call": {
@@ -1244,7 +1265,6 @@
         },
         "type": "object",
         "required": [
-          "composite_signal",
           "composite_call",
           "data_completeness",
           "methodology_version",
@@ -1255,9 +1275,16 @@
       "RecommendationLogEntry": {
         "properties": {
           "composite_signal": {
-            "type": "number",
-            "maximum": 2.0,
-            "minimum": -2.0,
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 2.0,
+                "minimum": -2.0
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Composite Signal"
           },
           "composite_call": {
@@ -1365,7 +1392,6 @@
         },
         "type": "object",
         "required": [
-          "composite_signal",
           "composite_call",
           "data_completeness",
           "methodology_version",

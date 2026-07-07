@@ -68,8 +68,9 @@ async def fetch_dashboard(conn: asyncpg.Connection, ticker: asyncpg.Record) -> D
             bull=float(row["target_price_bull"]) if row["target_price_bull"] is not None else None,
         )
 
+    signal = row["composite_signal"]
     rec = Recommendation(
-        composite_signal=float(row["composite_signal"]),
+        composite_signal=float(signal) if signal is not None else None,
         composite_call=row["composite_call"],
         target_price=target,
         confidence_level=row["confidence_level"],

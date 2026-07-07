@@ -64,6 +64,10 @@ def test_two_modules_down_is_suppressed_analysis_only(web_client, store):
     rec = r.json()["recommendation"]
     assert rec["composite_call"] == "SUPPRESSED"
     assert rec["suppressed_reason"] == "Analysis Only — Insufficient Data"
+    # ck_rec_suppressed_shape: a suppressed row carries NO score/target/confidence.
+    assert rec["composite_signal"] is None
+    assert rec["target_price"] is None
+    assert rec["confidence_level"] is None
     assert rec["per_module_breakdown"]  # transparency: breakdown still present
 
 

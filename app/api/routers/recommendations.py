@@ -69,11 +69,12 @@ async def recommendation_log(
                 base=float(r["target_price_base"]),
                 bull=float(r["target_price_bull"]) if r["target_price_bull"] is not None else None,
             )
+        signal = r["composite_signal"]
         entries.append(
             RecommendationLogEntry(
                 ticker=r["full_symbol"],
                 rec_date=r["rec_date"],
-                composite_signal=float(r["composite_signal"]),
+                composite_signal=float(signal) if signal is not None else None,
                 composite_call=r["composite_call"],
                 target_price=target,
                 confidence_level=r["confidence_level"],

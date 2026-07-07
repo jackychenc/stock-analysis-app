@@ -60,7 +60,9 @@ class TargetPrice(BaseModel):
 
 
 class Recommendation(BaseModel):
-    composite_signal: float = Field(ge=-2.0, le=2.0)
+    # Nullable by design: a SUPPRESSED row ("Analysis Only — Insufficient
+    # Data") carries NO score/target/confidence (contract v1.1+, FR-35/37).
+    composite_signal: float | None = Field(None, ge=-2.0, le=2.0)
     composite_call: CompositeCall
     target_price: TargetPrice | None = None
     confidence_level: ConfidenceLevel | None = None
@@ -97,8 +99,13 @@ class Dashboard(BaseModel):
 
 
 class ModuleDetail(BaseModel):
+    """Base lens-detail envelope (contract v1.2.1); per-lens extended fields
+    (TechnicalDetail latest/series, FundamentalDetail ratios, ...) are filled
+    by the ingestion steps (tasks #8/#9/#12)."""
+
     module: str
     status: ModuleStatus
+    signal_score: float | None = Field(None, ge=-2.0, le=2.0)
     as_of: date | None = None
     series: list[dict] = []
 
