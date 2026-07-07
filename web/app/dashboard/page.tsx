@@ -67,6 +67,16 @@ export default function DashboardPage() {
     [router],
   );
 
+  // Review/deep-link support: /dashboard?ticker=GF-B drives the state directly.
+  useEffect(() => {
+    const fromUrl = new URLSearchParams(window.location.search).get("ticker");
+    if (fromUrl) {
+      const symbol = fromUrl.trim().toUpperCase();
+      setTicker(symbol);
+      setQuery(symbol);
+    }
+  }, []);
+
   useEffect(() => {
     void load(query);
   }, [query, load]);
