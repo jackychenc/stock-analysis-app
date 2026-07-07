@@ -1,1 +1,41 @@
 @import "tailwindcss";
+
+/* A4 light-first design tokens — web-slice-handoff.md §1 (task #17) */
+:root {
+  /* surfaces */
+  --bg: #eef1f5; --card: #ffffff; --ink: #0f172a; --sub: #64748b;
+  --line: #e2e8f0; --line-2: #eef2f7;
+  /* diverging signal palette −2…+2 (always paired with icon+sign+label) */
+  --sig-ss: #c0392b;
+  --sig-s: #e06666;
+  --sig-hold: #64748b;
+  --sig-b: #22a565;
+  --sig-sb: #15803d;
+  --gauge-grad: linear-gradient(90deg, #c0392b, #cbd5e1 50%, #15803d);
+  /* state semantics */
+  --amber: #b45309; --amber-bg: #fef3c7;
+  --red: #991b1b; --red-bg: #fdecec;
+  --conf-hi-bg: #eafff2; --conf-hi-ink: #166534;
+  --accent: #2563eb;
+  /* shape + elevation */
+  --r-card: 14px; --r-hero: 16px; --r-chip: 9px; --r-pill: 12px;
+  --shadow: 0 1px 3px rgba(15, 23, 42, 0.06), 0 8px 24px rgba(15, 23, 42, 0.06);
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+}
+
+/* tabular figures everywhere money/signals render */
+.num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow);
+}
