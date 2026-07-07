@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - name: Lint
+        run: uv run ruff check .
+      - name: Unit + contract tests (no DB required)
+        run: uv run pytest -q
+
+  migration-verification:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: timescale/timescaledb:2.16.1-pg16
+        env:
+          POSTGRES_USER: stockapp
+          POSTGRES_PASSWORD: stockapp
+          POSTGRES_DB: stockapp
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U stockapp" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - name: Apply schema v1.0 + verify + seed
+        env:
+          DATABASE_URL: postgresql://stockapp:stockapp@localhost:5432/stockapp
+        run: |
+          uv run python -m app.db.migrate
+          uv run python scripts/seed.py
+          uv run python - <<'EOF'
+          import asyncio, asyncpg, os
+          async def check():
+              conn = await asyncpg.connect(os.environ["DATABASE_URL"])
+              tables = {r["tablename"] for r in await conn.fetch(
+                  "SELECT tablename FROM pg_tables WHERE schemaname='public'")}
+              expected = {"ticker","price_bar","technical_indicator","fundamental",
+                          "chip_data_tw","institutional_position_us","news_item",
+                          "recommendation","user_decision_log","backtest_result",
+                          "supply_chain_node","supply_chain_edge","pipeline_run",
+                          "user_config"}
+              missing = expected - tables
+              assert not missing, f"missing tables: {missing}"
+              hypertables = {r["hypertable_name"] for r in await conn.fetch(
+                  "SELECT hypertable_name FROM timescaledb_information.hypertables")}
+              assert {"price_bar","technical_indicator","chip_data_tw"} <= hypertables
+              await conn.close()
+              print("schema verification OK")
+          asyncio.run(check())
+          EOF
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run: { working-directory: web }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm install
+      - run: npm run build

@@ -1,0 +1,380 @@
+openapi: 3.1.0
+info:
+  title: Stock Investment Analysis App API
+  version: 1.0.0
+  description: >
+    API contract v1.0 (G1 baseline) frozen from system design deck §21.
+    Personal-use, single-user decision-support app. All routes auth-gated.
+    Dashboard is a single-row read of last night's precomputed snapshot.
+    NOT financial advice (FR-39). Owner: A3 Solution Architect.
+servers:
+  - url: /api/v1
+
+# =====================================================================
+# Global conventions
+#   * Auth: web = session cookie; iOS = Bearer JWT (+ refresh). One verifier.
+#   * A single failed scoring module => HTTP 200 with that module flagged
+#     status="unavailable". 503 is reserved for total API/DB outage.
+#   * Out-of-scope ticker => 404 with error code SECTOR_NOT_COVERED.
+#   * Dashboard ALWAYS returns all four scoring module keys (never omitted).
+# =====================================================================
+
+security:
+  - cookieAuth: []
+  - bearerAuth: []
+
+paths:
+  # ---------------- AUTH ----------------
+  /auth/login:
+    post:
+      tags: [auth]
+      security: []
+      summary: Authenticate; issues session cookie (web) or JWT+refresh (iOS).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/TokenBundle' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: Invalidate session/refresh token.
+      responses: { '204': { description: No Content } }
+  /auth/refresh:
+    post:
+      tags: [auth]
+      security: [ { bearerAuth: [] } ]
+      summary: Exchange a valid refresh token for a new short-lived JWT (iOS).
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/TokenBundle' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ---------------- STOCK DATA ----------------
+  /stocks/{ticker}/dashboard:
+    get:
+      tags: [stocks]
+      summary: Single-row dashboard read (recommendation + all 4 module states).
+      parameters: [ { $ref: '#/components/parameters/Ticker' } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Dashboard' } } } }
+        '404': { $ref: '#/components/responses/SectorNotCovered' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/TotalOutage' }
+  /stocks/{ticker}/technical:
+    get:
+      tags: [stocks]
+      summary: Technical lens detail (indicators + score history).
+      parameters: [ { $ref: '#/components/parameters/Ticker' } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ModuleDetail' } } } }
+        '404': { $ref: '#/components/responses/SectorNotCovered' }
+  /stocks/{ticker}/fundamentals:
+    get:
+      tags: [stocks]
+      summary: Fundamental lens detail.
+      parameters: [ { $ref: '#/components/parameters/Ticker' } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ModuleDetail' } } } }
+        '404': { $ref: '#/components/responses/SectorNotCovered' }
+  /stocks/{ticker}/news:
+    get:
+      tags: [stocks]
+      summary: Informational lens detail (headlines + sentiment).
+      parameters: [ { $ref: '#/components/parameters/Ticker' } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ModuleDetail' } } } }
+        '404': { $ref: '#/components/responses/SectorNotCovered' }
+  /stocks/{ticker}/chip:
+    get:
+      tags: [stocks]
+      summary: Chip/institutional lens detail (TW 3-institution / US 13F).
+      parameters: [ { $ref: '#/components/parameters/Ticker' } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ModuleDetail' } } } }
+        '404': { $ref: '#/components/responses/SectorNotCovered' }
+  /stocks/{ticker}/supply-chain:
+    get:
+      tags: [stocks]
+      summary: Supply-chain discovery graph (related investable names). Not scored.
+      parameters: [ { $ref: '#/components/parameters/Ticker' } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/SupplyChainGraph' } } } }
+        '404': { $ref: '#/components/responses/SectorNotCovered' }
+  /stocks/{ticker}/backtest:
+    get:
+      tags: [stocks]
+      summary: Benchmark-relative backtest for this ticker's methodology.
+      parameters:
+        - { $ref: '#/components/parameters/Ticker' }
+        - { name: window_months, in: query, schema: { type: integer, enum: [3,6,12], default: 6 } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/BacktestResult' } } } }
+        '404': { $ref: '#/components/responses/SectorNotCovered' }
+
+  # ---------------- DECISION LOG ----------------
+  /recommendations/log:
+    get:
+      tags: [recommendations]
+      summary: Recommendation history (immutable) with any user annotations.
+      parameters:
+        - { name: ticker, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 30, maximum: 365 } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/RecommendationLogEntry' } } } } }
+  /recommendations/log/{date}/annotate:
+    post:
+      tags: [recommendations]
+      summary: Record what the user did (annotation; never mutates the recommendation).
+      parameters:
+        - { name: date, in: path, required: true, schema: { type: string, format: date } }
+        - { name: ticker, in: query, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DecisionAnnotation' }
+      responses:
+        '201': { description: Created }
+        '404': { $ref: '#/components/responses/SectorNotCovered' }
+
+  # ---------------- CONFIG / OPS ----------------
+  /config/weights:
+    get:
+      tags: [config]
+      summary: Current module weights + horizon.
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/WeightConfig' } } } }
+    put:
+      tags: [config]
+      summary: Update module weights / horizon (user-configurable).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WeightConfig' }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/WeightConfig' } } } }
+        '422': { description: Weights must sum to 1.0 (±0.001) and be non-negative. }
+  /pipeline/status:
+    get:
+      tags: [ops]
+      summary: Per-source status of the most recent daily batch (R-01 monitoring).
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PipelineStatus' } } } }
+
+components:
+  securitySchemes:
+    cookieAuth: { type: apiKey, in: cookie, name: session }
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+
+  parameters:
+    Ticker:
+      name: ticker
+      in: path
+      required: true
+      description: Full symbol, e.g. 2330.TW, 6488.TWO, AAPL.
+      schema: { type: string }
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid credentials.
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    SectorNotCovered:
+      description: Ticker is outside covered scope.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { code: SECTOR_NOT_COVERED, message: "Ticker not covered in MVP scope." }
+    TotalOutage:
+      description: Total API/DB outage (reserved — NOT used for a single failed module).
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, enum: [SECTOR_NOT_COVERED, UNAUTHORIZED, VALIDATION_ERROR, TOTAL_OUTAGE] }
+        message: { type: string }
+
+    LoginRequest:
+      type: object
+      required: [username, password, client]
+      properties:
+        username: { type: string }
+        password: { type: string, format: password }
+        client: { type: string, enum: [web, ios] }
+
+    TokenBundle:
+      type: object
+      description: Web receives session cookie (empty body); iOS receives JWT + refresh.
+      properties:
+        access_token: { type: string, nullable: true }
+        refresh_token: { type: string, nullable: true }
+        expires_in: { type: integer, nullable: true }
+
+    ModuleStatus:
+      type: string
+      enum: [ok, unavailable]
+
+    PerModuleBreakdown:
+      type: object
+      required: [module, status, weight_assigned, weight_effective]
+      properties:
+        module: { type: string, enum: [technical, fundamental, chip, news] }
+        signal_score: { type: number, nullable: true, minimum: -2, maximum: 2 }
+        weight_assigned: { type: number }
+        weight_effective: { type: number }   # renormalised when a module is unavailable
+        status: { $ref: '#/components/schemas/ModuleStatus' }
+
+    Recommendation:
+      type: object
+      required: [composite_signal, composite_call, per_module_breakdown, data_completeness, methodology_version]
+      properties:
+        composite_signal: { type: number, minimum: -2, maximum: 2 }
+        composite_call:
+          type: string
+          enum: [STRONG_SELL, SELL, HOLD, BUY, STRONG_BUY, SUPPRESSED]
+        target_price:
+          type: object
+          nullable: true
+          properties:
+            bear: { type: number }
+            base: { type: number }
+            bull: { type: number }
+        confidence_level: { type: string, enum: [HIGH, MEDIUM, LOW], nullable: true }
+        confidence_pct: { type: number, nullable: true }
+        conflict_flag: { type: boolean }
+        reduced_confidence: { type: boolean }
+        horizon_months: { type: integer, enum: [3,6,12] }
+        data_completeness: { type: number, minimum: 0, maximum: 1 }
+        methodology_version: { type: string }
+        # per-lens breakdown is ALWAYS non-empty — no call ships without reasoning.
+        per_module_breakdown:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/PerModuleBreakdown' }
+        suppressed_reason:
+          type: string
+          nullable: true
+          description: Set when composite_call=SUPPRESSED (>=2 modules down => "Analysis Only — Insufficient Data").
+
+    Dashboard:
+      type: object
+      required: [ticker, rec_date, recommendation, modules]
+      properties:
+        ticker: { type: string }
+        rec_date: { type: string, format: date }
+        recommendation: { $ref: '#/components/schemas/Recommendation' }
+        # ALWAYS all four keys present; each carries ok|unavailable.
+        modules:
+          type: object
+          required: [technical, fundamental, chip, news]
+          properties:
+            technical: { $ref: '#/components/schemas/ModuleSummary' }
+            fundamental: { $ref: '#/components/schemas/ModuleSummary' }
+            chip: { $ref: '#/components/schemas/ModuleSummary' }
+            news: { $ref: '#/components/schemas/ModuleSummary' }
+        supply_chain_available: { type: boolean }
+
+    ModuleSummary:
+      type: object
+      required: [status]
+      properties:
+        status: { $ref: '#/components/schemas/ModuleStatus' }
+        signal_score: { type: number, nullable: true, minimum: -2, maximum: 2 }
+        headline_metric: { type: string, nullable: true }
+
+    ModuleDetail:
+      type: object
+      required: [module, status]
+      properties:
+        module: { type: string }
+        status: { $ref: '#/components/schemas/ModuleStatus' }
+        as_of: { type: string, format: date, nullable: true }
+        series: { type: array, items: { type: object, additionalProperties: true } }
+
+    SupplyChainGraph:
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: integer }
+              name: { type: string }
+              ticker: { type: string, nullable: true }
+              role: { type: string, enum: [fab, upstream_supplier, downstream_customer] }
+        edges:
+          type: array
+          items:
+            type: object
+            properties:
+              from: { type: integer }
+              to: { type: integer }
+              relationship_type: { type: string }
+
+    BacktestResult:
+      type: object
+      properties:
+        window_months: { type: integer, enum: [3,6,12] }
+        # headline uses full-data days only; partial reported separately, never blended.
+        rolling_accuracy_full:
+          type: number
+          nullable: true
+          description: NULL + insufficient_history=true when <12 months of history.
+        rolling_accuracy_partial: { type: number, nullable: true }
+        estimated_return: { type: number, nullable: true }
+        benchmark: { type: string, description: "^TWII (TW) or ^GSPC (US)" }
+        insufficient_history: { type: boolean }
+        methodology_version: { type: string }
+
+    RecommendationLogEntry:
+      allOf:
+        - $ref: '#/components/schemas/Recommendation'
+        - type: object
+          properties:
+            ticker: { type: string }
+            rec_date: { type: string, format: date }
+            annotation: { $ref: '#/components/schemas/DecisionAnnotation', nullable: true }
+
+    DecisionAnnotation:
+      type: object
+      required: [decision]
+      properties:
+        decision: { type: string, enum: [followed, ignored, partial] }
+        transaction_price: { type: number, nullable: true, description: Encrypted at rest (NFR-05). }
+        notes: { type: string, nullable: true, description: Encrypted at rest (NFR-05). }
+
+    WeightConfig:
+      type: object
+      required: [module_weights, horizon_months]
+      properties:
+        module_weights:
+          type: object
+          required: [technical, fundamental, chip, news]
+          properties:
+            technical: { type: number, minimum: 0, maximum: 1 }
+            fundamental: { type: number, minimum: 0, maximum: 1 }
+            chip: { type: number, minimum: 0, maximum: 1 }
+            news: { type: number, minimum: 0, maximum: 1 }
+        horizon_months: { type: integer, enum: [3,6,12] }
+
+    PipelineStatus:
+      type: object
+      properties:
+        run_date: { type: string, format: date }
+        completed_at: { type: string, format: date-time, nullable: true }
+        sla_met: { type: boolean, description: "true if completed by 07:00 TW (NFR-01)." }
+        sources:
+          type: array
+          items:
+            type: object
+            properties:
+              source_name: { type: string }
+              status: { type: string, enum: [ok, unavailable, running, error] }
+              consecutive_bad_days: { type: integer, description: "R-01: alert after 2." }

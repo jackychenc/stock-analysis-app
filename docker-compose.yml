@@ -1,0 +1,71 @@
+# Local-host testing stack — CURRENT deployment target (per @jackychenc 2026-07-08).
+# `docker compose up` brings up db + redis + api + batch + web.
+# API: http://localhost:8000 (/docs = OpenAPI) · Web: http://localhost:3000
+# Secrets come from .env (see .env.example) — never commit real keys.
+# Source: A3 contract freeze v1.0 docker-compose.yml + web service + auth env.
+
+services:
+  db:
+    image: timescale/timescaledb:2.16.1-pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-stockapp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stockapp}
+      POSTGRES_DB: ${POSTGRES_DB:-stockapp}
+    ports: ["127.0.0.1:5432:5432"]
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stockapp}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports: ["127.0.0.1:6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: { context: ., dockerfile: Dockerfile }
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-stockapp}:${POSTGRES_PASSWORD:-stockapp}@db:5432/${POSTGRES_DB:-stockapp}
+      REDIS_URL: redis://redis:6379/0
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?set APP_ENCRYPTION_KEY in .env}  # pgcrypto key (NFR-05)
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:?set ADMIN_USERNAME in .env}
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:?set ADMIN_PASSWORD_HASH in .env}
+      ENV: local
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  batch:
+    build: { context: ., dockerfile: Dockerfile }
+    # APScheduler runs daily 03:00 TW; POST /pipeline/run-now triggers on demand.
+    command: python -m app.batch.scheduler
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-stockapp}:${POSTGRES_PASSWORD:-stockapp}@db:5432/${POSTGRES_DB:-stockapp}
+      REDIS_URL: redis://redis:6379/0
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?set APP_ENCRYPTION_KEY in .env}
+      ENV: local
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  web:
+    build: { context: ./web, dockerfile: Dockerfile }
+    environment:
+      API_BASE_URL: http://api:8000/api/v1
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on:
+      - api
+
+volumes:
+  db_data:

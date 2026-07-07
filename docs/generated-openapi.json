@@ -1,0 +1,1607 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Stock Investment Analysis App API",
+    "description": "Personal decision-support, not financial advice (FR-39).",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/healthz": {
+      "get": {
+        "tags": [
+          "ops"
+        ],
+        "summary": "Healthz",
+        "description": "Unauthenticated liveness + dependency reachability.",
+        "operationId": "healthz_healthz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Healthz Healthz Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Login",
+        "description": "One verifier, two strategies: web gets a session cookie (empty bundle);\niOS gets JWT access + refresh tokens. [ADR-002]",
+        "operationId": "login_api_v1_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenBundle"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Logout",
+        "operationId": "logout_api_v1_auth_logout_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Refresh",
+        "description": "iOS: exchange a valid refresh token (Bearer) for a new JWT pair.",
+        "operationId": "refresh_api_v1_auth_refresh_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenBundle"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stocks/{ticker}/dashboard": {
+      "get": {
+        "tags": [
+          "stocks"
+        ],
+        "summary": "Dashboard",
+        "description": "Single-row snapshot read (NFR-02: no live computation on request path).",
+        "operationId": "dashboard_api_v1_stocks__ticker__dashboard_get",
+        "parameters": [
+          {
+            "name": "ticker",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ticker"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Dashboard"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stocks/{ticker}/technical": {
+      "get": {
+        "tags": [
+          "stocks"
+        ],
+        "summary": "Technical",
+        "operationId": "technical_api_v1_stocks__ticker__technical_get",
+        "parameters": [
+          {
+            "name": "ticker",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ticker"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModuleDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stocks/{ticker}/fundamentals": {
+      "get": {
+        "tags": [
+          "stocks"
+        ],
+        "summary": "Fundamentals",
+        "operationId": "fundamentals_api_v1_stocks__ticker__fundamentals_get",
+        "parameters": [
+          {
+            "name": "ticker",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ticker"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModuleDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stocks/{ticker}/news": {
+      "get": {
+        "tags": [
+          "stocks"
+        ],
+        "summary": "News",
+        "operationId": "news_api_v1_stocks__ticker__news_get",
+        "parameters": [
+          {
+            "name": "ticker",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ticker"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModuleDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stocks/{ticker}/chip": {
+      "get": {
+        "tags": [
+          "stocks"
+        ],
+        "summary": "Chip",
+        "operationId": "chip_api_v1_stocks__ticker__chip_get",
+        "parameters": [
+          {
+            "name": "ticker",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ticker"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModuleDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stocks/{ticker}/supply-chain": {
+      "get": {
+        "tags": [
+          "stocks"
+        ],
+        "summary": "Supply Chain",
+        "description": "Discovery layer (never scored). Graph populated in Step 5 (task #11).",
+        "operationId": "supply_chain_api_v1_stocks__ticker__supply_chain_get",
+        "parameters": [
+          {
+            "name": "ticker",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ticker"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupplyChainGraph"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stocks/{ticker}/backtest": {
+      "get": {
+        "tags": [
+          "stocks"
+        ],
+        "summary": "Backtest",
+        "description": "Backtest engine lands in Step 7 (task #13); until >=12mo of history is\nbackfilled this honestly reports insufficient_history=true (nfr-budgets.md).",
+        "operationId": "backtest_api_v1_stocks__ticker__backtest_get",
+        "parameters": [
+          {
+            "name": "ticker",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ticker"
+            }
+          },
+          {
+            "name": "window_months",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "enum": [
+                3,
+                6,
+                12
+              ],
+              "default": 6,
+              "title": "Window Months"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BacktestResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/recommendations/log": {
+      "get": {
+        "tags": [
+          "recommendations"
+        ],
+        "summary": "Recommendation Log",
+        "description": "Immutable recommendation history with any user annotations.",
+        "operationId": "recommendation_log_api_v1_recommendations_log_get",
+        "parameters": [
+          {
+            "name": "ticker",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ticker"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 365,
+              "default": 30,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RecommendationLogEntry"
+                  },
+                  "title": "Response Recommendation Log Api V1 Recommendations Log Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/recommendations/log/{rec_date}/annotate": {
+      "post": {
+        "tags": [
+          "recommendations"
+        ],
+        "summary": "Annotate",
+        "description": "Records what the user did. Annotates the immutable recommendation row \u2014\nnever mutates it. Price/notes are personal financial data: encrypted\ncolumn-level via pgcrypto before hitting disk (NFR-05).",
+        "operationId": "annotate_api_v1_recommendations_log__rec_date__annotate_post",
+        "parameters": [
+          {
+            "name": "rec_date",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "title": "Rec Date"
+            }
+          },
+          {
+            "name": "ticker",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ticker"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionAnnotation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Annotate Api V1 Recommendations Log  Rec Date  Annotate Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/config/weights": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Get Weights",
+        "operationId": "get_weights_api_v1_config_weights_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeightConfig"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Put Weights",
+        "operationId": "put_weights_api_v1_config_weights_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WeightConfig"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeightConfig"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pipeline/status": {
+      "get": {
+        "tags": [
+          "ops"
+        ],
+        "summary": "Pipeline Status",
+        "operationId": "pipeline_status_api_v1_pipeline_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pipeline/run-now": {
+      "post": {
+        "tags": [
+          "ops"
+        ],
+        "summary": "Run Now",
+        "description": "Local-test trigger (repo-layout.md): runs the batch skeleton on demand.",
+        "operationId": "run_now_api_v1_pipeline_run_now_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Run Now Api V1 Pipeline Run Now Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "BacktestResult": {
+        "properties": {
+          "window_months": {
+            "type": "integer",
+            "enum": [
+              3,
+              6,
+              12
+            ],
+            "title": "Window Months",
+            "default": 6
+          },
+          "rolling_accuracy_full": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rolling Accuracy Full"
+          },
+          "rolling_accuracy_partial": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rolling Accuracy Partial"
+          },
+          "estimated_return": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Return"
+          },
+          "benchmark": {
+            "type": "string",
+            "title": "Benchmark"
+          },
+          "insufficient_history": {
+            "type": "boolean",
+            "title": "Insufficient History",
+            "default": true
+          },
+          "methodology_version": {
+            "type": "string",
+            "title": "Methodology Version"
+          },
+          "disclaimer": {
+            "type": "string",
+            "title": "Disclaimer",
+            "default": "Personal decision-support only \u2014 not financial advice. Past performance does not guarantee future results."
+          }
+        },
+        "type": "object",
+        "required": [
+          "benchmark",
+          "methodology_version"
+        ],
+        "title": "BacktestResult"
+      },
+      "CompositeCall": {
+        "type": "string",
+        "enum": [
+          "STRONG_SELL",
+          "SELL",
+          "HOLD",
+          "BUY",
+          "STRONG_BUY",
+          "SUPPRESSED"
+        ],
+        "title": "CompositeCall"
+      },
+      "ConfidenceLevel": {
+        "type": "string",
+        "enum": [
+          "HIGH",
+          "MEDIUM",
+          "LOW"
+        ],
+        "title": "ConfidenceLevel"
+      },
+      "Dashboard": {
+        "properties": {
+          "ticker": {
+            "type": "string",
+            "title": "Ticker"
+          },
+          "rec_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rec Date"
+          },
+          "recommendation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Recommendation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "modules": {
+            "$ref": "#/components/schemas/DashboardModules"
+          },
+          "supply_chain_available": {
+            "type": "boolean",
+            "title": "Supply Chain Available",
+            "default": false
+          },
+          "disclaimer": {
+            "type": "string",
+            "title": "Disclaimer",
+            "default": "Personal decision-support only \u2014 not financial advice. Past performance does not guarantee future results."
+          }
+        },
+        "type": "object",
+        "required": [
+          "ticker",
+          "rec_date",
+          "recommendation",
+          "modules"
+        ],
+        "title": "Dashboard"
+      },
+      "DashboardModules": {
+        "properties": {
+          "technical": {
+            "$ref": "#/components/schemas/ModuleSummary"
+          },
+          "fundamental": {
+            "$ref": "#/components/schemas/ModuleSummary"
+          },
+          "chip": {
+            "$ref": "#/components/schemas/ModuleSummary"
+          },
+          "news": {
+            "$ref": "#/components/schemas/ModuleSummary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "technical",
+          "fundamental",
+          "chip",
+          "news"
+        ],
+        "title": "DashboardModules"
+      },
+      "DecisionAnnotation": {
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": [
+              "followed",
+              "ignored",
+              "partial"
+            ],
+            "title": "Decision"
+          },
+          "transaction_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transaction Price"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "decision"
+        ],
+        "title": "DecisionAnnotation"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "LoginRequest": {
+        "properties": {
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "password": {
+            "type": "string",
+            "title": "Password"
+          },
+          "client": {
+            "type": "string",
+            "enum": [
+              "web",
+              "ios"
+            ],
+            "title": "Client"
+          }
+        },
+        "type": "object",
+        "required": [
+          "username",
+          "password",
+          "client"
+        ],
+        "title": "LoginRequest"
+      },
+      "ModuleDetail": {
+        "properties": {
+          "module": {
+            "type": "string",
+            "title": "Module"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ModuleStatus"
+          },
+          "as_of": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of"
+          },
+          "series": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Series",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "module",
+          "status"
+        ],
+        "title": "ModuleDetail"
+      },
+      "ModuleStatus": {
+        "type": "string",
+        "enum": [
+          "ok",
+          "unavailable"
+        ],
+        "title": "ModuleStatus"
+      },
+      "ModuleSummary": {
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/ModuleStatus"
+          },
+          "signal_score": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 2.0,
+                "minimum": -2.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signal Score"
+          },
+          "headline_metric": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Headline Metric"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "ModuleSummary"
+      },
+      "ModuleWeights": {
+        "properties": {
+          "technical": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Technical",
+            "default": 0.3
+          },
+          "fundamental": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Fundamental",
+            "default": 0.3
+          },
+          "chip": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Chip",
+            "default": 0.25
+          },
+          "news": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "News",
+            "default": 0.15
+          }
+        },
+        "type": "object",
+        "title": "ModuleWeights"
+      },
+      "PerModuleBreakdown": {
+        "properties": {
+          "module": {
+            "type": "string",
+            "enum": [
+              "technical",
+              "fundamental",
+              "chip",
+              "news"
+            ],
+            "title": "Module"
+          },
+          "signal_score": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 2.0,
+                "minimum": -2.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signal Score"
+          },
+          "weight_assigned": {
+            "type": "number",
+            "title": "Weight Assigned"
+          },
+          "weight_effective": {
+            "type": "number",
+            "title": "Weight Effective"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ModuleStatus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "module",
+          "weight_assigned",
+          "weight_effective",
+          "status"
+        ],
+        "title": "PerModuleBreakdown"
+      },
+      "PipelineSource": {
+        "properties": {
+          "source_name": {
+            "type": "string",
+            "title": "Source Name"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "unavailable",
+              "running",
+              "error",
+              "never_run"
+            ],
+            "title": "Status"
+          },
+          "consecutive_bad_days": {
+            "type": "integer",
+            "title": "Consecutive Bad Days",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_name",
+          "status"
+        ],
+        "title": "PipelineSource"
+      },
+      "PipelineStatus": {
+        "properties": {
+          "run_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Date"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "sla_met": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sla Met"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/PipelineSource"
+            },
+            "type": "array",
+            "title": "Sources",
+            "default": []
+          }
+        },
+        "type": "object",
+        "title": "PipelineStatus"
+      },
+      "Recommendation": {
+        "properties": {
+          "composite_signal": {
+            "type": "number",
+            "maximum": 2.0,
+            "minimum": -2.0,
+            "title": "Composite Signal"
+          },
+          "composite_call": {
+            "$ref": "#/components/schemas/CompositeCall"
+          },
+          "target_price": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TargetPrice"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "confidence_level": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConfidenceLevel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "confidence_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence Pct"
+          },
+          "conflict_flag": {
+            "type": "boolean",
+            "title": "Conflict Flag",
+            "default": false
+          },
+          "reduced_confidence": {
+            "type": "boolean",
+            "title": "Reduced Confidence",
+            "default": false
+          },
+          "horizon_months": {
+            "type": "integer",
+            "enum": [
+              3,
+              6,
+              12
+            ],
+            "title": "Horizon Months",
+            "default": 6
+          },
+          "data_completeness": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Data Completeness"
+          },
+          "methodology_version": {
+            "type": "string",
+            "title": "Methodology Version"
+          },
+          "per_module_breakdown": {
+            "items": {
+              "$ref": "#/components/schemas/PerModuleBreakdown"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Per Module Breakdown"
+          },
+          "suppressed_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suppressed Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "composite_signal",
+          "composite_call",
+          "data_completeness",
+          "methodology_version",
+          "per_module_breakdown"
+        ],
+        "title": "Recommendation"
+      },
+      "RecommendationLogEntry": {
+        "properties": {
+          "composite_signal": {
+            "type": "number",
+            "maximum": 2.0,
+            "minimum": -2.0,
+            "title": "Composite Signal"
+          },
+          "composite_call": {
+            "$ref": "#/components/schemas/CompositeCall"
+          },
+          "target_price": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TargetPrice"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "confidence_level": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConfidenceLevel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "confidence_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence Pct"
+          },
+          "conflict_flag": {
+            "type": "boolean",
+            "title": "Conflict Flag",
+            "default": false
+          },
+          "reduced_confidence": {
+            "type": "boolean",
+            "title": "Reduced Confidence",
+            "default": false
+          },
+          "horizon_months": {
+            "type": "integer",
+            "enum": [
+              3,
+              6,
+              12
+            ],
+            "title": "Horizon Months",
+            "default": 6
+          },
+          "data_completeness": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Data Completeness"
+          },
+          "methodology_version": {
+            "type": "string",
+            "title": "Methodology Version"
+          },
+          "per_module_breakdown": {
+            "items": {
+              "$ref": "#/components/schemas/PerModuleBreakdown"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Per Module Breakdown"
+          },
+          "suppressed_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suppressed Reason"
+          },
+          "ticker": {
+            "type": "string",
+            "title": "Ticker"
+          },
+          "rec_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Rec Date"
+          },
+          "annotation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecisionAnnotation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "composite_signal",
+          "composite_call",
+          "data_completeness",
+          "methodology_version",
+          "per_module_breakdown",
+          "ticker",
+          "rec_date"
+        ],
+        "title": "RecommendationLogEntry"
+      },
+      "SupplyChainEdge": {
+        "properties": {
+          "from": {
+            "type": "integer",
+            "title": "From"
+          },
+          "to": {
+            "type": "integer",
+            "title": "To"
+          },
+          "relationship_type": {
+            "type": "string",
+            "title": "Relationship Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from",
+          "to",
+          "relationship_type"
+        ],
+        "title": "SupplyChainEdge"
+      },
+      "SupplyChainGraph": {
+        "properties": {
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/SupplyChainNode"
+            },
+            "type": "array",
+            "title": "Nodes",
+            "default": []
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/SupplyChainEdge"
+            },
+            "type": "array",
+            "title": "Edges",
+            "default": []
+          }
+        },
+        "type": "object",
+        "title": "SupplyChainGraph"
+      },
+      "SupplyChainNode": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "ticker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ticker"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "fab",
+              "upstream_supplier",
+              "downstream_customer"
+            ],
+            "title": "Role"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "role"
+        ],
+        "title": "SupplyChainNode"
+      },
+      "TargetPrice": {
+        "properties": {
+          "bear": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bear"
+          },
+          "base": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base"
+          },
+          "bull": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bull"
+          }
+        },
+        "type": "object",
+        "title": "TargetPrice"
+      },
+      "TokenBundle": {
+        "properties": {
+          "access_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Token"
+          },
+          "refresh_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refresh Token"
+          },
+          "expires_in": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires In"
+          }
+        },
+        "type": "object",
+        "title": "TokenBundle"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "WeightConfig": {
+        "properties": {
+          "module_weights": {
+            "$ref": "#/components/schemas/ModuleWeights",
+            "default": {
+              "technical": 0.3,
+              "fundamental": 0.3,
+              "chip": 0.25,
+              "news": 0.15
+            }
+          },
+          "horizon_months": {
+            "type": "integer",
+            "enum": [
+              3,
+              6,
+              12
+            ],
+            "title": "Horizon Months",
+            "default": 6
+          }
+        },
+        "type": "object",
+        "title": "WeightConfig"
+      }
+    }
+  }
+}
