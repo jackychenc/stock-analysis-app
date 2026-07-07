@@ -65,12 +65,13 @@
                 "available": ["technical","fundamental","chip","news"],
                 "target_inputs": {"peer_median_PE": 15.0, "trailing_EPS": 30.0, "latest_close": 500.0}},
       "expect": {"composite_signal": 0.43, "composite_call": "HOLD",
+                 "weight_effective": {"technical": 0.30, "fundamental": 0.30, "chip": 0.25, "news": 0.15},
                  "data_completeness": 1.00, "reduced_confidence": false,
                  "spread": 3.4, "conflict_flag": true,
                  "confidence_pct": 0.00, "confidence_level": "LOW",
                  "target_base": 475.0000, "target_bear": 403.7500, "target_bull": 546.2500,
                  "target_fundamental_usable": true,
-                 "note": "composite raw 0.425 -> half-up 0.43; HOLD so confidence = count(|signal|<=0.75)=0/4"}
+                 "note": "FULL-DATA state: weight_effective == weight_assigned (NO renormalisation, completeness 1.0) — must NOT be 0.0. composite raw 0.425 -> half-up 0.43; HOLD glyph must be NEUTRAL (grey), NOT green-up (composite_signal +0.43 sign must NOT drive the call glyph). confidence = count(|signal|<=0.75)=0/4."}
     },
 
     {"id": "GF-BAND-SS", "desc": "band: below -1.5 -> Strong Sell", "input": {"composite_signal": -1.51}, "expect": {"composite_call": "STRONG_SELL"}},
