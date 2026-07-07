@@ -7,7 +7,7 @@
     "conventions": {
       "default_weights": {"technical": 0.30, "fundamental": 0.30, "chip": 0.25, "news": 0.15},
       "composite_round": "half-up to 2 decimals (NUMERIC(4,2))",
-      "weight_effective_round": "2 decimals",
+      "weight_effective_round": "FULL precision for computation (never round intermediate weights); 4 decimals persisted/displayed (contract v1.2.2 §2/§9)",
       "target_round": "4 decimals",
       "bands": "STRONG_SELL[-2,-1.5) SELL[-1.5,-0.75) HOLD[-0.75,+0.75] BUY(+0.75,+1.5] STRONG_BUY(+1.5,+2.0]; boundary->milder",
       "conflict": "spread=max-min over available signals; flag when spread>2.0 (strict)",
@@ -38,13 +38,13 @@
                 "available": ["fundamental","chip","news"],
                 "target_inputs": {"peer_median_PE": 18.0, "trailing_EPS": 40.0, "latest_close": 900.0}},
       "expect": {"composite_signal": 0.77, "composite_call": "BUY",
-                 "weight_effective": {"technical": 0.00, "fundamental": 0.43, "chip": 0.36, "news": 0.21},
+                 "weight_effective": {"technical": 0.0000, "fundamental": 0.4286, "chip": 0.3571, "news": 0.2143},
                  "data_completeness": 0.75, "reduced_confidence": true,
                  "spread": 2.0, "conflict_flag": false,
                  "confidence_pct": 66.67, "confidence_level": "MEDIUM",
                  "target_base": 810.0000, "target_bear": 688.5000, "target_bull": 931.5000,
                  "target_fundamental_usable": true,
-                 "note": "composite raw 0.540/0.70=0.771428 -> 0.77; band on persisted 2dp value; still BUY (>+0.75)"}
+                 "note": "weights used at FULL precision in compute (0.30/0.70 etc); composite raw 0.540/0.70=0.771428 -> round composite only -> 0.77 -> BUY (>+0.75). weight_effective persisted at 4dp per contract v1.2.2 §2/§9."}
     },
     {
       "id": "GF-C-suppressed-two-down",
