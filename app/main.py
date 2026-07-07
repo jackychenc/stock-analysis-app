@@ -1,4 +1,3 @@
-import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -20,9 +19,11 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    # Fail closed (A8 P1-SEC-1): a weak or default signing secret must not boot.
     if len(settings.jwt_secret) < 32 or settings.jwt_secret.startswith("dev-only"):
-        logging.getLogger(__name__).warning(
-            "JWT_SECRET is short or a dev default; use >=32 bytes (token_hex(32))."
+        raise RuntimeError(
+            "JWT_SECRET must be >=32 bytes and not a dev default. "
+            'Generate one: python3 -c "import secrets; print(secrets.token_hex(32))"'
         )
     app = FastAPI(
         title="Stock Investment Analysis App API",

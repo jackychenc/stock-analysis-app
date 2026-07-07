@@ -72,4 +72,25 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: npm install
+      - run: npm audit --audit-level=high
       - run: npm run build
+
+  security:
+    # A8 P1-SEC-2: secret scan + dependency audit + SAST.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Secret scan (gitleaks, full history)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - name: Python dependency audit (pip-audit)
+        run: |
+          uv export --no-emit-project --no-dev -o requirements.txt
+          uvx pip-audit -r requirements.txt
+      - name: SAST (bandit, medium+ severity)
+        run: uvx bandit -r app -ll

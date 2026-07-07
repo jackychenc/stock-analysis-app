@@ -6,18 +6,34 @@ against real Timescale runs via docker compose (see README).
 """
 
 import json
+import os
 from datetime import date
 
 import pytest
 from fastapi.testclient import TestClient
 
-import app.db.pool as pool_module
-from app.core.config import get_settings
-from app.core.security import hash_password
-from app.main import create_app
+# 64 hex chars — satisfies the fail-closed >=32-byte JWT_SECRET boot check.
+# app/main.py builds the module-level `app` at import time and refuses a weak
+# secret, so this MUST be set before any app.main import below.
+TEST_JWT_SECRET = "0123456789abcdef" * 4
+os.environ.setdefault("JWT_SECRET", TEST_JWT_SECRET)
+
+import app.db.pool as pool_module  # noqa: E402
+from app.core.config import get_settings  # noqa: E402
+from app.core.security import hash_password  # noqa: E402
+from app.main import create_app  # noqa: E402
 
 TEST_USER = "jacob"
 TEST_PASSWORD = "correct horse battery staple"
+
+
+@pytest.fixture(autouse=True)
+def _test_env(monkeypatch):
+    """Every test gets a boot-valid JWT_SECRET (create_app fails closed without one)."""
+    monkeypatch.setenv("JWT_SECRET", TEST_JWT_SECRET)
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 class FakeConnection:
@@ -116,7 +132,6 @@ def store() -> dict:
 def client(monkeypatch, store) -> TestClient:
     monkeypatch.setenv("ADMIN_USERNAME", TEST_USER)
     monkeypatch.setenv("ADMIN_PASSWORD_HASH", hash_password(TEST_PASSWORD))
-    monkeypatch.setenv("JWT_SECRET", "test-secret")
     get_settings.cache_clear()
 
     fake = FakePool(store)
