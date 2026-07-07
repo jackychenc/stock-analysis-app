@@ -51,8 +51,8 @@ def test_single_module_down_is_200_with_flag(web_client, store):
     live_effective = sum(
         b["weight_effective"] for b in rec["per_module_breakdown"] if b["status"] == "ok"
     )
-    # Renormalised; tolerance covers domain-contract §9's 2-decimal rounding.
-    assert abs(live_effective - 1.0) <= 0.02
+    # Renormalised; tolerance covers domain-contract v1.2.2 §9's 4dp rounding.
+    assert abs(live_effective - 1.0) <= 0.0002
 
 
 def test_two_modules_down_is_suppressed_analysis_only(web_client, store):
