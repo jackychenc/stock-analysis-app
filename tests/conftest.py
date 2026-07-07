@@ -161,7 +161,8 @@ def sample_breakdown(*, unavailable: tuple[str, ...] = ()) -> list[dict]:
             "module": m,
             "signal_score": None if m in unavailable else scores[m],
             "weight_assigned": w,
-            "weight_effective": 0.0 if m in unavailable else round(w / total, 6),
+            # domain-contract §9: weight_effective carries 2 decimals.
+            "weight_effective": 0.0 if m in unavailable else round(w / total, 2),
             "status": "unavailable" if m in unavailable else "ok",
         }
         for m, w in weights.items()

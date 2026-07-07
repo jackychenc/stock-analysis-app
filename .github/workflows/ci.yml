@@ -36,7 +36,7 @@ jobs:
       - uses: astral-sh/setup-uv@v4
         with:
           python-version: "3.12"
-      - name: Apply schema v1.0 + verify + seed
+      - name: Apply schema v1.2.1 + verify + seed
         env:
           DATABASE_URL: postgresql://stockapp:stockapp@localhost:5432/stockapp
         run: |
