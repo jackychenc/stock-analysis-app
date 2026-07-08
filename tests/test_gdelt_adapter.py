@@ -469,3 +469,49 @@ async def test_t12_m1_failclosed_fault_yielding_zero_items_never_neutral():
         faulted = await news_signal(conn, 1, date(2026, 7, 8), "2330.TW")
         assert faulted.status == "unavailable", f"fault {fault!r} not fail-closed"
         assert faulted.signal is None  # never a fabricated neutral
+
+
+# --- D-1 fail-closed totality (A8 in-gate, both sides required) -------------------
+# Extends T12-M1-FAILCLOSED to the internal-data trigger: fail-closed must not
+# depend on ticker-table hygiene.
+
+async def test_d1_read_side_malformed_symbol_fail_closes_never_neutral():
+    """D-1 read side: a non-SYMBOL_RE full_symbol can never trust the token
+    (its own failure could have been unrepresentable) -> unavailable
+    unconditionally — even when the source row reads ok and the window would
+    read 0 rows (which would otherwise be neutral 0.0)."""
+    from datetime import date
+
+    from app.batch.signals.news import news_signal
+
+    conn = _EndToEndConn([{"id": 9, "full_symbol": "BAD SYM"}])
+    conn.run_row = {"status": "ok",
+                    "message": "[live] tickers ok=1 empty=0 failed=0; "
+                               "headlines ingested=2 rejected=0"}
+    sig = await news_signal(conn, 9, date(2026, 7, 8), "BAD SYM")
+    assert sig.status == "unavailable" and sig.signal is None
+    assert sig.note == "symbol not token-safe"
+
+
+async def test_d1_write_side_malformed_symbol_never_truncates_neighbours():
+    """D-1 write side: a malformed symbol in failed_symbols must never
+    truncate conforming neighbours out of the token — the neighbour's genuine
+    failure must still read unavailable, never neutral. The failed= count
+    stays the FULL count (evidence never silently lost)."""
+    from datetime import date
+
+    from app.batch.adapters.gdelt_adapter import NewsIngestStats
+    from app.batch.signals.news import news_signal, parse_failed_tickers
+
+    stats = NewsIngestStats(failed_symbols=["BAD SYM", "AAPL"])
+    msg = stats.summary()
+    assert "failed=2" in msg  # full count, not the token count
+    # token contains ONLY the conforming neighbour — nothing to truncate on
+    assert msg.endswith("failed_tickers=AAPL")
+    assert parse_failed_tickers(msg) == frozenset({"AAPL"})
+
+    conn = _EndToEndConn([US1])
+    conn.run_row = {"status": "ok", "message": f"[live] partial: {msg}"}
+    neighbour = await news_signal(conn, 3, date(2026, 7, 8), "AAPL")
+    assert neighbour.status == "unavailable"  # genuinely failed -> never neutral
+    assert neighbour.note == "gdelt ticker query failed"

@@ -27,6 +27,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
 
+from app.batch.adapters.common import SYMBOL_RE
 from app.batch.signals import ModuleSignal, clamp_signal, unavailable
 
 WINDOW_DAYS = 7  # lookback window for "the day's" news context
@@ -63,6 +64,12 @@ def news_score(sentiments: list[Decimal]) -> ModuleSignal:
 
 async def news_signal(conn: Any, ticker_id: int, asof: date,
                       full_symbol: str) -> ModuleSignal:
+    # D-1 read-side fail-close: a symbol that cannot be represented in the
+    # failed_tickers= token (SYMBOL_RE excludes whitespace/commas) can never
+    # trust the token — its failure could have been unrepresentable. Treat
+    # its news lens as unavailable outright, never a masked neutral.
+    if not SYMBOL_RE.fullmatch(full_symbol):
+        return unavailable("symbol not token-safe")
     # A8 integrity rule: status derives from the fetch outcome FIRST; the
     # window rows are only read once the fetch is known good for this ticker.
     run = await conn.fetchrow(

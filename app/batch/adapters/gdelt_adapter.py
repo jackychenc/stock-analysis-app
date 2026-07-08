@@ -41,6 +41,7 @@ from typing import Any, Protocol
 
 from app.batch.adapters.common import (
     PACING_DELAY_S,
+    SYMBOL_RE,
     AdapterUnavailable,
     _with_retries,
     check_symbol,
@@ -237,7 +238,21 @@ class NewsIngestStats:
                f"headlines ingested={self.headlines_ingested} "
                f"rejected={self.items_rejected}")
         if self.failed_symbols:
-            msg += f"; failed_tickers={','.join(self.failed_symbols)}"
+            # D-1 token integrity (fail-closed totality): only SYMBOL_RE-
+            # conforming symbols may enter the machine-parsed token — one
+            # malformed symbol must never truncate conforming neighbours out
+            # of it (the regex stops at whitespace). The failed= count above
+            # stays the FULL count and dropped symbols are logged, so evidence
+            # is never silently lost; the read side (signals/news.py)
+            # independently fail-closes any non-conforming symbol.
+            safe = [s for s in self.failed_symbols if SYMBOL_RE.fullmatch(s)]
+            if len(safe) < len(self.failed_symbols):
+                logger.warning(
+                    "gdelt run message: %d non-token-safe failed symbol(s) "
+                    "omitted from failed_tickers=",
+                    len(self.failed_symbols) - len(safe))
+            if safe:
+                msg += f"; failed_tickers={','.join(safe)}"
         return msg
 
 
