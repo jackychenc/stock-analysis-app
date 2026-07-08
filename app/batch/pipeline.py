@@ -5,9 +5,14 @@ peers).
 Task #8: yfinance (price_bar + fundamental) is LIVE. Task #9: chip sources
 twse_tpex (chip_data_tw) + edgar_13f (institutional_position_us) are LIVE —
 two adapters, two pipeline_run rows, independently isolated (T9-O1). News
-(task #12) remains an honest 'unavailable' stub; signal calculators + scoring
-are task #10. `pipeline_run` rows record ok/unavailable/error per source,
-feeding /pipeline/status and the R-01 consecutive-bad-days alert.
+(task #12) remains an honest 'unavailable' stub. Task #10: the ENGINE stage
+(signal calculators + recommendation writes, domain-contract §1–§10) runs
+AFTER the ingestion sources and records its own pipeline_run row under
+source_name='engine' — schema.sql constrains pipeline_run only by
+UNIQUE(run_date, source_name) (no CHECK on source_name values), so the engine
+row is legal; /pipeline/status keeps reporting the 4 ingestion sources.
+`pipeline_run` rows record ok/unavailable/error per source, feeding
+/pipeline/status and the R-01 consecutive-bad-days alert.
 """
 
 import logging
@@ -32,10 +37,15 @@ from app.batch.adapters.yfinance_adapter import (
 )
 from app.core.config import get_settings
 from app.db.pool import get_pool
+from app.services.recommendation_engine import run_engine
 
 logger = logging.getLogger(__name__)
 
 KNOWN_SOURCES = ("yfinance", "twse_tpex", "edgar_13f", "gdelt")
+# Task #10: derived stage, not an ingestion source — tracked in pipeline_run
+# for ops visibility but deliberately NOT in KNOWN_SOURCES (the /pipeline
+# status contract lists the 4 external sources).
+ENGINE_SOURCE = "engine"
 
 _NOT_IMPLEMENTED = {
     "gdelt": "adapter lands in roadmap Step 6 (task #12)",
@@ -92,11 +102,22 @@ async def _run_edgar_13f(conn) -> tuple[str, str]:
     return "ok", f"[{mode}] {stats.summary()}"
 
 
+async def _run_engine_stage(conn, run_date: date) -> tuple[str, str]:
+    """Task #10: signal calculators + recommendation writes (contract §1–§10).
+    Runs after ingestion so it scores today's freshly upserted facts."""
+    stats = await run_engine(conn, run_date)
+    if stats.tickers_scored == 0:
+        return "unavailable", f"no ticker had scoreable data: {stats.summary()}"
+    return "ok", stats.summary()
+
+
 async def run_pipeline_once(run_date: date | None = None) -> None:
     run_date = run_date or datetime.now(UTC).date()
     pool = await get_pool()
     async with pool.acquire() as conn:
-        for source in KNOWN_SOURCES:
+        # Ingestion sources first, then the derived engine stage (deck §22.1
+        # ingest → signal → score → persist). Same isolation per stage.
+        for source in (*KNOWN_SOURCES, ENGINE_SOURCE):
             # Per-source isolation: each source is its own try/except so a
             # failure never aborts peers (deck §22.4).
             await conn.execute(
@@ -116,6 +137,8 @@ async def run_pipeline_once(run_date: date | None = None) -> None:
                     status, message = await _run_twse_tpex(conn)
                 elif source == "edgar_13f":
                     status, message = await _run_edgar_13f(conn)
+                elif source == ENGINE_SOURCE:
+                    status, message = await _run_engine_stage(conn, run_date)
                 else:
                     status, message = "unavailable", _NOT_IMPLEMENTED[source]
             except Exception as exc:

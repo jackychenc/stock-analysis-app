@@ -53,6 +53,11 @@ class PerModuleBreakdown(BaseModel):
     weight_assigned: float
     weight_effective: float  # renormalised when a module is unavailable
     status: ModuleStatus
+    # v1.2.6 §9 intra-module completeness: distinct from availability — a
+    # subfields-partial module (chip nets-only) stays ok/in-composite but
+    # discloses the gap (GF-CHIP-PARTIAL-intra-module).
+    subfields_complete: bool = True
+    subfields_note: str | None = None
 
 
 class TargetPrice(BaseModel):
