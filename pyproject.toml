@@ -13,6 +13,7 @@ dependencies = [
     "PyJWT>=2.9",
     "itsdangerous>=2.2",
     "apscheduler>=3.10,<4",
+    "yfinance>=0.2.50",
 ]
 
 [dependency-groups]

@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     # Key Vault in a future cloud phase (KeyProvider abstraction, ADR-004).
     app_encryption_key: str = ""
 
+    # FR-19 / A6 bucket 4: deterministic ingestion without network. CI and
+    # stack smokes set YFINANCE_FIXTURE_MODE=true; production leaves it off.
+    yfinance_fixture_mode: bool = False
+
     # FR-39: compliance-owned config (A8) — wording changes are a config
     # change, not a contract change. Canonical text is ASCII-ONLY by A8's
     # final ruling (2026-07-08) so payload == X-Disclaimer header holds
