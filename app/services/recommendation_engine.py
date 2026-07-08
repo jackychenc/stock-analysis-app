@@ -351,7 +351,7 @@ async def score_ticker(
     technical, latest_close = await technical_signal(conn, ticker["id"], rec_date)
     fundamental, peer_median_pe, trailing_eps = await fundamental_signal(conn, ticker["id"])
     chip = await chip_signal(conn, ticker["id"], ticker["exchange"])
-    news = await news_signal(conn, ticker["id"], rec_date)
+    news = await news_signal(conn, ticker["id"], rec_date, ticker["full_symbol"])
 
     lenses: dict[str, ModuleSignal] = {
         "technical": technical, "fundamental": fundamental,

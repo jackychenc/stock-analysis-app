@@ -4,8 +4,8 @@ peers).
 
 Task #8: yfinance (price_bar + fundamental) is LIVE. Task #9: chip sources
 twse_tpex (chip_data_tw) + edgar_13f (institutional_position_us) are LIVE —
-two adapters, two pipeline_run rows, independently isolated (T9-O1). News
-(task #12) remains an honest 'unavailable' stub. Task #10: the ENGINE stage
+two adapters, two pipeline_run rows, independently isolated (T9-O1). Task
+#12: gdelt (news_item) is LIVE. Task #10: the ENGINE stage
 (signal calculators + recommendation writes, domain-contract §1–§10) runs
 AFTER the ingestion sources and records its own pipeline_run row under
 source_name='engine' — schema.sql constrains pipeline_run only by
@@ -15,6 +15,7 @@ row is legal; /pipeline/status keeps reporting the 4 ingestion sources.
 /pipeline/status and the R-01 consecutive-bad-days alert.
 """
 
+import asyncio
 import logging
 from datetime import UTC, date, datetime
 
@@ -24,6 +25,12 @@ from app.batch.adapters.edgar_adapter import (
     RealEdgarClient,
     ingest_edgar_13f,
     load_curated_13f,
+)
+from app.batch.adapters.gdelt_adapter import (
+    FixtureGdeltClient,
+    RealGdeltClient,
+    ingest_gdelt,
+    load_news_queries,
 )
 from app.batch.adapters.twse_tpex_adapter import (
     FixtureTwseTpexClient,
@@ -47,9 +54,9 @@ KNOWN_SOURCES = ("yfinance", "twse_tpex", "edgar_13f", "gdelt")
 # status contract lists the 4 external sources).
 ENGINE_SOURCE = "engine"
 
-_NOT_IMPLEMENTED = {
-    "gdelt": "adapter lands in roadmap Step 6 (task #12)",
-}
+
+async def _no_pacing(_delay: float) -> None:
+    """Fixture-mode sleeper: nothing to pace — no live egress (FR-19/R-01)."""
 
 
 async def _run_yfinance(conn) -> tuple[str, str]:
@@ -102,6 +109,28 @@ async def _run_edgar_13f(conn) -> tuple[str, str]:
     return "ok", f"[{mode}] {stats.summary()}"
 
 
+async def _run_gdelt(conn) -> tuple[str, str]:
+    """GDELT headlines + VADER sentiment -> news_item. Curated query phrases
+    from config (the #9 precedent); fixture mode keeps CI off the live GDELT
+    DOC API (R-01) and skips pacing (nothing to pace). NOTE: the summary's
+    `failed_tickers=` token is machine-parsed by signals/news.news_signal —
+    it must survive into pipeline_run.message verbatim. All-tickers-failed
+    raises AdapterUnavailable inside ingest_gdelt (source effectively down)."""
+    settings = get_settings()
+    queries = load_news_queries(settings.news_queries_path)
+    fixture = settings.gdelt_fixture_mode
+    client = FixtureGdeltClient() if fixture else RealGdeltClient()
+    mode = "fixture" if fixture else "live"
+    try:
+        stats = await ingest_gdelt(conn, client, queries=queries,
+                                   sleeper=_no_pacing if fixture else asyncio.sleep)
+    except AdapterUnavailable as exc:
+        return "unavailable", f"[{mode}] {exc}"
+    if stats.failed_symbols:
+        return "ok", f"[{mode}] partial: {stats.summary()}"
+    return "ok", f"[{mode}] {stats.summary()}"
+
+
 async def _run_engine_stage(conn, run_date: date) -> tuple[str, str]:
     """Task #10: signal calculators + recommendation writes (contract §1–§10).
     Runs after ingestion so it scores today's freshly upserted facts."""
@@ -137,10 +166,10 @@ async def run_pipeline_once(run_date: date | None = None) -> None:
                     status, message = await _run_twse_tpex(conn)
                 elif source == "edgar_13f":
                     status, message = await _run_edgar_13f(conn)
-                elif source == ENGINE_SOURCE:
+                elif source == "gdelt":
+                    status, message = await _run_gdelt(conn)
+                else:  # ENGINE_SOURCE — the loop enumerates exactly these 5
                     status, message = await _run_engine_stage(conn, run_date)
-                else:
-                    status, message = "unavailable", _NOT_IMPLEMENTED[source]
             except Exception as exc:
                 # A8 #6 log hygiene: generic status, no response bodies.
                 status, message = "error", f"unexpected: {exc}"

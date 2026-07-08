@@ -38,9 +38,15 @@ class Settings(BaseSettings):
     # TWSE/TPEx or EDGAR network in CI.
     twse_tpex_fixture_mode: bool = False
     edgar_fixture_mode: bool = False
+    # Task #12: same fixture switch for the GDELT news source — no live
+    # GDELT DOC API network in CI (env GDELT_FIXTURE_MODE).
+    gdelt_fixture_mode: bool = False
     # PM condition (task #9): curated 13F filers + CUSIP map are config data,
     # editable without a deploy; validated at load (A8).
     curated_13f_path: str = "config/curated_13f.json"
+    # Task #12 (#9 curated-config precedent): curated GDELT query phrases per
+    # ticker are config data, editable without a deploy; validated at load (A8).
+    news_queries_path: str = "config/news_queries.json"
 
     # FR-39: compliance-owned config (A8) — wording changes are a config
     # change, not a contract change. Canonical text is ASCII-ONLY by A8's

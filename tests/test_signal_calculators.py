@@ -1,15 +1,22 @@
 """Task #10 signal-calculator unit tests — indicator arithmetic on small
 hand-computed series (FR-12/FR-19), chip aux-partial visibility (Cindy binding
 condition / A6 D2), fundamental peer comparison (FR-13), and the news lens's
-unavailable-not-neutral rule (contract §4 over FR-15's neutral wording)."""
+contract v1.2.8 §4a ternary (fetch-fail -> unavailable; fetch-ok+empty ->
+neutral 0.00; fetch-ok+N -> scored — status from the FETCH outcome, never
+inferred from row count, per the A8 integrity rule)."""
 
-from datetime import date
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 
 from app.batch.signals import ModuleSignal, clamp_signal, sign_of
 from app.batch.signals.chip import US_LABEL, chip_score_tw, chip_score_us
 from app.batch.signals.fundamental import fundamental_score, median
-from app.batch.signals.news import news_score
+from app.batch.signals.news import (
+    WINDOW_DAYS,
+    news_score,
+    news_signal,
+    parse_failed_tickers,
+)
 from app.batch.signals.technical import (
     MIN_BARS,
     compute_technical,
@@ -245,19 +252,114 @@ def test_chip_us_zero_prior_base_is_direction_only():
     assert chip_score_us([(Q1, 0), (Q2, 0)]).signal == Decimal("0")
 
 
-# --- news: unavailable-not-neutral -------------------------------------------------
+# --- news: contract v1.2.8 §4a ternary (task #12) ----------------------------------
 
-def test_news_empty_is_unavailable_not_neutral():
-    # Contract §4 + GF-B/GF-C: a missing module is UNAVAILABLE (feeds
-    # renormalisation), never a fabricated neutral 0 (silent dilution).
+def test_news_empty_after_successful_fetch_is_neutral_zero():
+    # §4a supersedes the old unavailable-not-neutral rule: callers reach
+    # news_score ONLY after the fetch is known good, so an empty window is a
+    # genuinely quiet week — neutral 0.00, full completeness, NO renorm.
     signal = news_score([])
-    assert signal.status == "unavailable"
-    assert signal.signal is None
+    assert signal.status == "ok"
+    assert signal.signal == Decimal("0.00")
+    assert signal.note == "0 headlines in window"  # exact wording (QA gate)
+    assert signal.subfields_complete is True
 
 
 def test_news_mean_sentiment_scaled_to_signal_range():
     assert news_score(dseq("0.25", "0.25")).signal == Decimal("0.5")  # x2 scale
     assert news_score(dseq("-1", "-1")).signal == Decimal("-2")  # clamped floor
+
+
+class _NewsConn:
+    """Fake conn for the news_signal ternary: a scripted gdelt pipeline_run
+    row + window sentiments. Asserts the A8 integrity ordering (run status is
+    read; rows only when asked) and the bounded window (upper bound present)."""
+
+    def __init__(self, run_row, sentiments=()):
+        self.run_row = run_row
+        self.sentiments = list(sentiments)
+        self.window_args: tuple | None = None
+
+    async def fetchrow(self, query, *args):
+        assert "FROM pipeline_run" in query and "'gdelt'" in query
+        return self.run_row
+
+    async def fetch(self, query, *args):
+        assert "FROM news_item" in query and "sentiment IS NOT NULL" in query
+        # historical determinism: BOTH window bounds are in the SQL
+        assert "published_at >= $2" in query and "published_at < $3" in query
+        self.window_args = args
+        return [{"sentiment": s} for s in self.sentiments]
+
+
+ASOF = date(2026, 7, 8)
+
+
+async def test_news_signal_no_gdelt_run_is_unavailable():
+    signal = await news_signal(_NewsConn(None), 1, ASOF, "2330.TW")
+    assert signal.status == "unavailable" and signal.signal is None
+    assert "not fetched" in signal.note
+
+
+async def test_news_signal_bad_source_status_is_unavailable():
+    for status in ("unavailable", "error", "running"):
+        conn = _NewsConn({"status": status, "message": "boom"})
+        signal = await news_signal(conn, 1, ASOF, "2330.TW")
+        assert signal.status == "unavailable"
+        assert f"gdelt source {status}" == signal.note
+
+
+async def test_news_signal_failed_tickers_token_marks_ticker_unavailable():
+    # A8 integrity: THIS ticker's query failed -> unavailable, even though
+    # the source row reads ok; a peer symbol still scores from its rows.
+    msg = ("[live] partial: tickers ok=1 empty=0 failed=1; headlines "
+           "ingested=3 rejected=0; failed_tickers=2330.TW,6488.TWO")
+    failed = await news_signal(_NewsConn({"status": "ok", "message": msg}),
+                               1, ASOF, "2330.TW")
+    assert failed.status == "unavailable"
+    assert failed.note == "gdelt ticker query failed"
+    ok = await news_signal(_NewsConn({"status": "ok", "message": msg},
+                                     [Decimal("0.5")]), 2, ASOF, "AAPL")
+    assert ok.status == "ok"
+
+
+async def test_news_signal_fetch_ok_zero_rows_is_neutral_not_renormalised():
+    # error and empty both leave 0 rows — the run status is the discriminator.
+    conn = _NewsConn({"status": "ok", "message": "tickers ok=2 empty=1 ..."})
+    signal = await news_signal(conn, 1, ASOF, "6488.TWO")
+    assert signal.status == "ok"
+    assert signal.signal == Decimal("0.00")
+    assert signal.note == "0 headlines in window"
+    assert signal.subfields_complete is True  # dc 1.0 — no renormalisation
+
+
+async def test_news_signal_scores_mean_x2_over_bounded_window():
+    conn = _NewsConn({"status": "ok", "message": "ok"},
+                     [Decimal("0.5"), Decimal("-0.1")])
+    signal = await news_signal(conn, 1, ASOF, "2330.TW")
+    assert signal.signal == Decimal("0.4")  # mean 0.2 x2, full precision
+    assert signal.note == f"2 headlines over {WINDOW_DAYS}d"
+    # window: [asof-7d 00:00 UTC, asof+1d 00:00 UTC) — deterministic re-reads
+    _, start, end = conn.window_args
+    assert start == datetime.combine(ASOF - timedelta(days=WINDOW_DAYS),
+                                     time.min, tzinfo=UTC)
+    assert end == datetime.combine(ASOF + timedelta(days=1), time.min, tzinfo=UTC)
+
+
+async def test_news_signal_extreme_sentiments_clamped():
+    conn = _NewsConn({"status": "ok", "message": "ok"},
+                     [Decimal("1"), Decimal("1")])
+    assert (await news_signal(conn, 1, ASOF, "2330.TW")).signal == Decimal("2")
+    conn = _NewsConn({"status": "ok", "message": "ok"},
+                     [Decimal("-1"), Decimal("-0.9")])
+    assert (await news_signal(conn, 1, ASOF, "2330.TW")).signal == Decimal("-1.9")
+
+
+def test_parse_failed_tickers_token():
+    assert parse_failed_tickers("x; failed_tickers=2330.TW,AAPL") == {
+        "2330.TW", "AAPL"}
+    assert parse_failed_tickers("tickers ok=3; no failures") == frozenset()
+    assert parse_failed_tickers(None) == frozenset()
 
 
 # --- fundamental: peer comparison ---------------------------------------------------

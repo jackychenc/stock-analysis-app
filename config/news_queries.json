@@ -1,0 +1,6 @@
+{
+  "_comment": "Curated GDELT query phrases per ticker (owner-editable). Unlisted tickers fall back to the exact quoted symbol.",
+  "2330.TW": ["TSMC", "Taiwan Semiconductor"],
+  "6488.TWO": ["GlobalWafers"],
+  "AAPL": ["Apple Inc", "AAPL"]
+}
