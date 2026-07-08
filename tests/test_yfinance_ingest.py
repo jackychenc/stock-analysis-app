@@ -233,6 +233,17 @@ async def test_non_transient_error_does_not_retry():
 
 # --- A8 #1: egress allowlist -------------------------------------------------
 
+async def test_trailing_newline_symbol_rejected():
+    # A8 Y-1: `$`-anchored match would admit "AAPL\n"; fullmatch must not.
+    sneaky = {"id": 8, "full_symbol": "AAPL\n"}
+    db = FakeDb([sneaky, T2])
+    client = ScriptedClient(bars={"AAPL": [good_bar(close=200.0)]},
+                            info={"AAPL": GOOD_INFO})
+    stats = await ingest_yfinance(db, client, asof=ASOF, sleeper=no_sleep)
+    assert stats.tickers_failed == 1
+    assert all(call[1] != "AAPL\n" for call in client.calls)
+
+
 async def test_bad_symbol_rejected_before_egress():
     evil = {"id": 9, "full_symbol": "EVIL/../?x=1"}
     db = FakeDb([evil, T2])

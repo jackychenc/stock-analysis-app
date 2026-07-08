@@ -292,8 +292,9 @@ async def _ingest_one(
     stats: IngestStats,
     sleeper=asyncio.sleep,
 ) -> None:
-    # A8 #1: allowlist before any egress.
-    if not _SYMBOL_RE.match(symbol):
+    # A8 #1: allowlist before any egress. fullmatch (Y-1): `$` would admit a
+    # trailing newline — this regex IS the SSRF boundary, so match exactly.
+    if not _SYMBOL_RE.fullmatch(symbol):
         raise ValueError("symbol rejected by egress allowlist")
 
     have_bars = await conn.fetchval(
