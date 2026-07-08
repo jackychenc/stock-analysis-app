@@ -36,12 +36,14 @@ from app.batch.adapters.common import (
 )
 
 __all__ = [
+    "BENCHMARK_SYMBOLS",
     "PACING_DELAY_S",
     "AdapterUnavailable",
     "FixtureYFinanceClient",
     "IngestStats",
     "RealYFinanceClient",
     "YFinanceClient",
+    "check_benchmark_symbol",
     "ingest_yfinance",
 ]
 
@@ -49,6 +51,18 @@ logger = logging.getLogger(__name__)
 
 BACKFILL_PERIOD = "2y"     # first run per ticker: backtest needs >=12-24mo (§25/7)
 INCREMENTAL_PERIOD = "7d"  # daily runs: short overlap window, upserts dedupe
+
+# Task #13: backtest honesty (contract §10) needs ^TWII / ^GSPC daily bars.
+# The caret prefix is deliberately OUTSIDE SYMBOL_RE — index symbols are
+# validated by EXACT membership in this curated allowlist (stronger than a
+# regex), never by loosening the covered-ticker egress boundary (A8 #1).
+BENCHMARK_SYMBOLS = ("^TWII", "^GSPC")
+# exchange labels: schema.sql constrains ticker.exchange only by convention
+# ('TWSE' | 'TPEx' | 'US') — the TW index rides 'TWSE', the US index 'US'.
+_BENCHMARK_META = {
+    "^TWII": ("TWSE", "TAIEX (TW benchmark index)"),
+    "^GSPC": ("US", "S&P 500 (US benchmark index)"),
+}
 
 # A8 #4: bounds beyond NaN — poisoned upstream values must not land in the DB.
 _MAX_PRICE = Decimal("10000000")      # no listed equity trades at 10M/share
@@ -97,7 +111,9 @@ class RealYFinanceClient:
 class FixtureYFinanceClient:
     """Deterministic fixture mode (FR-19 / A6 bucket 4): reproducible synthetic
     data, zero network — for CI and stack smoke without touching Yahoo (R-01).
-    Values derive only from (symbol, date), so re-runs are byte-stable."""
+    Values derive only from (symbol, date), so re-runs are byte-stable.
+    Benchmark symbols (^TWII/^GSPC, task #13) flow through the SAME generator —
+    2y of stable daily-ish bars, so containerized/CI gates stay offline."""
 
     def fetch_daily_bars(self, symbol: str, period: str) -> list[dict[str, Any]]:
         from datetime import timedelta
@@ -141,12 +157,15 @@ class IngestStats:
     bars_upserted: int = 0
     bars_skipped: int = 0        # NaN/incomplete rows — counted, not hidden
     fundamentals_upserted: int = 0
+    benchmarks_ok: int = 0       # task #13: index bars counted SEPARATELY so
+    benchmarks_failed: int = 0   # the run message stays honest per population
     failures: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
         msg = (f"tickers ok={self.tickers_ok} failed={self.tickers_failed}; "
                f"bars upserted={self.bars_upserted} skipped={self.bars_skipped}; "
-               f"fundamentals={self.fundamentals_upserted}")
+               f"fundamentals={self.fundamentals_upserted}; "
+               f"benchmarks ok={self.benchmarks_ok} failed={self.benchmarks_failed}")
         if self.failures:
             msg += f"; failures: {'; '.join(self.failures)}"
         return msg
@@ -222,6 +241,19 @@ async def ingest_yfinance(
 
     if stats.tickers_ok == 0:
         raise AdapterUnavailable(f"all tickers failed: {'; '.join(stats.failures)}")
+
+    # Task #13: benchmarks AFTER the covered universe — their bars feed the
+    # backtest stage only (is_covered=FALSE, never scored). Same per-symbol
+    # isolation; failures are counted in the separate benchmark counters.
+    for symbol in BENCHMARK_SYMBOLS:
+        await sleeper(PACING_DELAY_S)  # covered fetches already ran — keep pacing
+        try:
+            await _ingest_benchmark(conn, client, symbol, stats, sleeper=sleeper)
+            stats.benchmarks_ok += 1
+        except Exception as exc:
+            stats.benchmarks_failed += 1
+            stats.failures.append(f"{symbol}: {exc}")
+            logger.warning("yfinance benchmark ingest failed for %s: %s", symbol, exc)
     return stats
 
 
@@ -238,6 +270,45 @@ def _valid_bar_values(o: Decimal, h: Decimal, lo: Decimal, c: Decimal,
     return True
 
 
+def _usable_bar_rows(bars: list[dict[str, Any]], ticker_id: int,
+                     stats: IngestStats) -> list[tuple]:
+    """Decimal-safe bar rows for _UPSERT_BAR; incomplete/out-of-bounds rows
+    are skipped LOUDLY (counted in stats — FR-34 spirit)."""
+    rows = []
+    for bar in bars:
+        o, h, lo, c = (_num(bar.get(k)) for k in ("open", "high", "low", "close"))
+        vol = _int(bar.get("volume"))
+        if (None in (o, h, lo, c) or bar.get("date") is None
+                or not _valid_bar_values(o, h, lo, c, vol)):
+            stats.bars_skipped += 1  # incomplete/out-of-bounds: skip loudly
+            continue
+        rows.append((ticker_id, bar["date"], o, h, lo, c, vol))
+    return rows
+
+
+async def _fetch_and_upsert_bars(
+    conn: Any,
+    client: YFinanceClient,
+    ticker_id: int,
+    symbol: str,
+    stats: IngestStats,
+    sleeper=asyncio.sleep,
+) -> None:
+    """Backfill-or-incremental daily bars -> price_bar (covered + benchmark)."""
+    have_bars = await conn.fetchval(
+        "SELECT count(*) FROM price_bar WHERE ticker_id = $1", ticker_id
+    )
+    period = INCREMENTAL_PERIOD if have_bars else BACKFILL_PERIOD
+
+    bars = await _with_retries(client.fetch_daily_bars, symbol, period,
+                               sleeper=sleeper)
+    rows = _usable_bar_rows(bars, ticker_id, stats)
+    if not rows:
+        raise ValueError(f"no usable price bars returned (period={period})")
+    await conn.executemany(_UPSERT_BAR, rows)
+    stats.bars_upserted += len(rows)
+
+
 async def _ingest_one(
     conn: Any,
     client: YFinanceClient,
@@ -250,26 +321,8 @@ async def _ingest_one(
     # A8 #1 / Y-1: fullmatch allowlist before any egress (common.check_symbol).
     check_symbol(symbol)
 
-    have_bars = await conn.fetchval(
-        "SELECT count(*) FROM price_bar WHERE ticker_id = $1", ticker_id
-    )
-    period = INCREMENTAL_PERIOD if have_bars else BACKFILL_PERIOD
-
-    bars = await _with_retries(client.fetch_daily_bars, symbol, period,
-                               sleeper=sleeper)
-    rows = []
-    for bar in bars:
-        o, h, lo, c = (_num(bar.get(k)) for k in ("open", "high", "low", "close"))
-        vol = _int(bar.get("volume"))
-        if (None in (o, h, lo, c) or bar.get("date") is None
-                or not _valid_bar_values(o, h, lo, c, vol)):
-            stats.bars_skipped += 1  # incomplete/out-of-bounds: skip loudly
-            continue
-        rows.append((ticker_id, bar["date"], o, h, lo, c, vol))
-    if not rows:
-        raise ValueError(f"no usable price bars returned (period={period})")
-    await conn.executemany(_UPSERT_BAR, rows)
-    stats.bars_upserted += len(rows)
+    await _fetch_and_upsert_bars(conn, client, ticker_id, symbol, stats,
+                                 sleeper=sleeper)
 
     info = await _with_retries(client.fetch_fundamentals, symbol, sleeper=sleeper)
     values = [_num(info.get(key)) for key in _FUNDAMENTAL_FIELDS.values()]
@@ -280,3 +333,43 @@ async def _ingest_one(
         return
     await conn.execute(_UPSERT_FUNDAMENTAL, ticker_id, asof, *values)
     stats.fundamentals_upserted += 1
+
+
+# --- market benchmarks (task #13) --------------------------------------------
+
+def check_benchmark_symbol(symbol: str) -> None:
+    """A8 #1 for index symbols: EXACT membership in the curated allowlist
+    BEFORE any egress. Deliberately not SYMBOL_RE — the caret stays outside
+    the covered-ticker regex; anything not literally listed is rejected."""
+    if symbol not in BENCHMARK_SYMBOLS:
+        raise ValueError("benchmark symbol rejected by egress allowlist")
+
+
+# is_covered=FALSE: benchmark rows must never leak into scoring/dashboard —
+# run_engine and every ticker-listing query filter on is_covered. sector stays
+# NULL (an index has none; the coverage gate is is_covered, not sector).
+_INSERT_BENCHMARK_TICKER = """
+    INSERT INTO ticker (symbol, exchange, full_symbol, name, is_covered)
+    VALUES ($1, $2, $3, $4, FALSE)
+    ON CONFLICT (full_symbol) DO NOTHING
+"""
+
+
+async def _ingest_benchmark(
+    conn: Any,
+    client: YFinanceClient,
+    symbol: str,
+    stats: IngestStats,
+    sleeper=asyncio.sleep,
+) -> None:
+    """Ensure the benchmark's ticker row exists, then upsert its daily bars
+    exactly like a covered ticker's (same validation, same _UPSERT_BAR).
+    No fundamentals — an index has none to snapshot."""
+    check_benchmark_symbol(symbol)  # exact membership BEFORE any egress
+    exchange, name = _BENCHMARK_META[symbol]
+    await conn.execute(_INSERT_BENCHMARK_TICKER, symbol, exchange, symbol, name)
+    ticker_id = await conn.fetchval(
+        "SELECT id FROM ticker WHERE full_symbol = $1", symbol
+    )
+    await _fetch_and_upsert_bars(conn, client, ticker_id, symbol, stats,
+                                 sleeper=sleeper)

@@ -11,7 +11,9 @@ AFTER the ingestion sources and records its own pipeline_run row under
 source_name='engine' — schema.sql constrains pipeline_run only by
 UNIQUE(run_date, source_name) (no CHECK on source_name values), so the engine
 row is legal; /pipeline/status keeps reporting the 4 ingestion sources.
-`pipeline_run` rows record ok/unavailable/error per source, feeding
+Task #13: the BACKTEST stage (benchmark-relative accuracy, contract §10)
+runs AFTER the engine under source_name='backtest' — same derived-stage
+pattern. `pipeline_run` rows record ok/unavailable/error per source, feeding
 /pipeline/status and the R-01 consecutive-bad-days alert.
 """
 
@@ -44,6 +46,7 @@ from app.batch.adapters.yfinance_adapter import (
 )
 from app.core.config import get_settings
 from app.db.pool import get_pool
+from app.services.backtest_engine import run_backtest
 from app.services.recommendation_engine import run_engine
 
 logger = logging.getLogger(__name__)
@@ -53,6 +56,10 @@ KNOWN_SOURCES = ("yfinance", "twse_tpex", "edgar_13f", "gdelt")
 # for ops visibility but deliberately NOT in KNOWN_SOURCES (the /pipeline
 # status contract lists the 4 external sources).
 ENGINE_SOURCE = "engine"
+# Task #13: derived stage AFTER the engine — evaluates matured recommendations
+# against the market benchmarks (contract §10). Same pattern: own pipeline_run
+# row, deliberately NOT in KNOWN_SOURCES.
+BACKTEST_SOURCE = "backtest"
 
 
 async def _no_pacing(_delay: float) -> None:
@@ -140,13 +147,25 @@ async def _run_engine_stage(conn, run_date: date) -> tuple[str, str]:
     return "ok", stats.summary()
 
 
+async def _run_backtest_stage(conn, run_date: date) -> tuple[str, str]:
+    """Task #13: benchmark-relative backtest over matured recommendations
+    (contract §10). Runs after the engine stage so today's rows are in the
+    history it evaluates. No recommendation rows at all yet → the stage is
+    honestly 'unavailable' (run_backtest writes nothing in that case)."""
+    stats = await run_backtest(conn, run_date)
+    if stats.rows_upserted == 0:
+        return "unavailable", f"no recommendation history yet: {stats.summary()}"
+    return "ok", stats.summary()
+
+
 async def run_pipeline_once(run_date: date | None = None) -> None:
     run_date = run_date or datetime.now(UTC).date()
     pool = await get_pool()
     async with pool.acquire() as conn:
-        # Ingestion sources first, then the derived engine stage (deck §22.1
-        # ingest → signal → score → persist). Same isolation per stage.
-        for source in (*KNOWN_SOURCES, ENGINE_SOURCE):
+        # Ingestion sources first, then the derived engine + backtest stages
+        # (deck §22.1 ingest → signal → score → backtest → persist). Same
+        # isolation per stage.
+        for source in (*KNOWN_SOURCES, ENGINE_SOURCE, BACKTEST_SOURCE):
             # Per-source isolation: each source is its own try/except so a
             # failure never aborts peers (deck §22.4).
             await conn.execute(
@@ -168,8 +187,10 @@ async def run_pipeline_once(run_date: date | None = None) -> None:
                     status, message = await _run_edgar_13f(conn)
                 elif source == "gdelt":
                     status, message = await _run_gdelt(conn)
-                else:  # ENGINE_SOURCE — the loop enumerates exactly these 5
+                elif source == ENGINE_SOURCE:
                     status, message = await _run_engine_stage(conn, run_date)
+                else:  # BACKTEST_SOURCE — the loop enumerates exactly these 6
+                    status, message = await _run_backtest_stage(conn, run_date)
             except Exception as exc:
                 # A8 #6 log hygiene: generic status, no response bodies.
                 status, message = "error", f"unexpected: {exc}"

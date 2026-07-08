@@ -1,7 +1,8 @@
+from enum import IntEnum
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.deps import current_user
-from app.core.config import get_settings
 from app.db.pool import get_pool
 from app.schemas.contracts import (
     BacktestResult,
@@ -11,6 +12,7 @@ from app.schemas.contracts import (
     SupplyChainGraph,
 )
 from app.services import read_service
+from app.services.backtest_engine import compute_ticker_backtest
 
 router = APIRouter(prefix="/stocks", tags=["stocks"], dependencies=[Depends(current_user)])
 
@@ -82,21 +84,26 @@ async def supply_chain(ticker: str) -> SupplyChainGraph:
     return SupplyChainGraph()
 
 
+class WindowMonths(IntEnum):
+    """openapi.yaml: window_months enum [3, 6, 12] — an IntEnum so FastAPI
+    coerces AND validates the query string (Literal[int] would 422 on '12')."""
+
+    quarter = 3
+    half = 6
+    year = 12
+
+
 @router.get("/{ticker}/backtest", response_model=BacktestResult)
 async def backtest(
-    ticker: str, window_months: int = Query(6, enum=[3, 6, 12])
+    ticker: str, window_months: WindowMonths = Query(WindowMonths.half)
 ) -> BacktestResult:
-    """Backtest engine lands in Step 7 (task #13); until >=12mo of history is
-    backfilled this honestly reports insufficient_history=true (nfr-budgets.md)."""
+    """Task #13: TICKER-SCOPED backtest computed at request time (contract
+    §10 honesty rules; <12mo history honestly reports insufficient_history).
+    An A3 scope ruling on serving the GLOBAL backtest_result rows instead is
+    pending — the choice is isolated inside compute_ticker_backtest, so the
+    swap is a one-function change here."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await _covered_ticker_or_404(conn, ticker)
-    settings = get_settings()
-    return BacktestResult(
-        window_months=window_months,
-        benchmark=read_service.benchmark_for(row["exchange"]),
-        insufficient_history=True,
-        methodology_version=settings.methodology_version,
-        disclaimer=settings.disclaimer_text,  # FR-39: config-sourced
-        disclaimer_version=settings.disclaimer_version,
-    )
+        return await compute_ticker_backtest(conn, row,
+                                             window_months=int(window_months))

@@ -114,5 +114,5 @@ def _empty_dashboard(full_symbol: str) -> Dashboard:
     )
 
 
-def benchmark_for(exchange: str) -> str:
-    return "^TWII" if exchange in ("TWSE", "TPEx") else "^GSPC"
+# benchmark_for moved to app.services.backtest_engine (task #13): the §10
+# contract keys the benchmark off the ticker's full_symbol market suffix.

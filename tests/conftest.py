@@ -64,13 +64,32 @@ class FakeConnection:
         q = " ".join(query.split()).lower()
         if "from pipeline_run" in q:
             return []
+        if "from price_bar" in q:  # task #13 backtest bar load
+            return [b for b in self.store.get("price_bars", []) if b["bar_date"] <= args[0]]
+        if "r.rec_date >= $1" in q:  # task #13 backtest rec load (windowed)
+            rows = []
+            for r in self.store["recommendations"]:
+                if not (args[0] <= r["rec_date"] <= args[1]):
+                    continue
+                if len(args) > 2 and r["ticker_id"] != args[2]:
+                    continue
+                full_symbol = next(t["full_symbol"] for t in self.store["tickers"].values()
+                                   if t["id"] == r["ticker_id"])
+                rows.append({**r, "full_symbol": full_symbol})
+            return rows
         if "from recommendation" in q:
             return []
+        if "from ticker" in q:  # task #13 benchmark ticker-id map
+            return list(self.store["tickers"].values())
         if "from schema_migrations" in q:
             return []
         raise AssertionError(f"FakeConnection.fetch: unhandled query: {q[:120]}")
 
     async def fetchval(self, query: str, *args):
+        q = " ".join(query.split()).lower()
+        if "min(rec_date)" in q:  # task #13 history gate
+            recs = self.store["recommendations"]
+            return min((r["rec_date"] for r in recs), default=None)
         return 1
 
     async def execute(self, query: str, *args):

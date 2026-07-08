@@ -15,13 +15,16 @@ ASOF = date(2026, 7, 8)
 
 
 class FakeDb:
-    """Captures upserts; emulates the two queries the adapter makes."""
+    """Captures upserts; emulates the queries the adapter makes (covered
+    tickers + the task-#13 benchmark rows/lookups)."""
 
     def __init__(self, tickers, existing_bars=0):
         self.tickers = tickers
         self.existing_bars = existing_bars
         self.bar_rows: list[tuple] = []
         self.fundamental_rows: list[tuple] = []
+        self.benchmark_ticker_rows: list[tuple] = []  # task #13 ticker inserts
+        self.benchmark_ids: dict[str, int] = {}
         self.sql_log: list[str] = []
 
     async def fetch(self, query, *args):
@@ -29,6 +32,8 @@ class FakeDb:
         return self.tickers
 
     async def fetchval(self, query, *args):
+        if "FROM ticker" in query:  # task #13: benchmark ticker-id lookup
+            return self.benchmark_ids.setdefault(args[0], 100 + len(self.benchmark_ids))
         assert "FROM price_bar" in query
         return self.existing_bars
 
@@ -40,6 +45,10 @@ class FakeDb:
 
     async def execute(self, query, *args):
         self.sql_log.append(query)
+        if "INSERT INTO ticker" in query:  # task #13: benchmark ticker row
+            assert "ON CONFLICT (full_symbol) DO NOTHING" in query
+            self.benchmark_ticker_rows.append(args)
+            return "INSERT 0 1"
         assert "ON CONFLICT (ticker_id, asof_date)" in query  # idempotent
         assert "ingested_at = now()" in query  # v1.2.5 last-fetched provenance
         self.fundamental_rows.append(args)
@@ -191,15 +200,21 @@ async def test_rate_limit_429_retries_with_backoff_then_succeeds():
     async def record_sleep(d):
         delays.append(d)
 
+    from app.batch.adapters.yfinance_adapter import PACING_DELAY_S
+
     db = FakeDb([T1])
     client = FlakyClient(info={"2330.TW": GOOD_INFO})
     stats = await ingest_yfinance(db, client, asof=ASOF, sleeper=record_sleep)
     assert stats.tickers_ok == 1
-    assert attempts["n"] == 3  # bounded — no retry storm (T8-O5)
-    # exponential backoff with jitter (A8 #3): base 1s then 2s, x1.0..1.5
-    assert len(delays) == 2
+    # bounded — no retry storm (T8-O5): 3 covered attempts, plus the two
+    # benchmark bar fetches (task #13) which succeed first try.
+    assert attempts["n"] == 5
+    # exponential backoff with jitter (A8 #3): base 1s then 2s, x1.0..1.5;
+    # the trailing delays are the fixed pre-benchmark pacing pauses.
+    assert len(delays) == 4
     assert 1.0 <= delays[0] <= 1.5
     assert 2.0 <= delays[1] <= 3.0
+    assert delays[2:] == [PACING_DELAY_S, PACING_DELAY_S]
 
 
 async def test_requests_are_paced_between_tickers():
@@ -216,7 +231,9 @@ async def test_requests_are_paced_between_tickers():
         info={"2330.TW": GOOD_INFO, "AAPL": GOOD_INFO},
     )
     await ingest_yfinance(db, client, asof=ASOF, sleeper=record_sleep)
-    assert delays.count(PACING_DELAY_S) == 1  # N tickers -> N-1 pacing pauses
+    # N covered tickers -> N-1 pauses between them, plus one pause before each
+    # of the 2 benchmark fetches (task #13): 1 + 2 = 3.
+    assert delays.count(PACING_DELAY_S) == 3
 
 
 async def test_non_transient_error_does_not_retry():
@@ -267,3 +284,66 @@ async def test_fixture_mode_is_deterministic_and_offline():
     assert db1.bar_rows == db2.bar_rows  # byte-stable re-runs (FR-19)
     assert db1.fundamental_rows == db2.fundamental_rows
     assert len(db1.bar_rows) > 300  # backfill depth for backtest history
+
+
+# --- task #13: benchmark ingestion (^TWII / ^GSPC) ----------------------------
+
+BENCH_BARS = {"^TWII": [good_bar(close=23000.0)], "^GSPC": [good_bar(close=5600.0)]}
+
+
+async def test_benchmark_rows_and_bars_ingested():
+    db = FakeDb([T1])
+    client = ScriptedClient(bars={"2330.TW": [good_bar()], **BENCH_BARS},
+                            info={"2330.TW": GOOD_INFO})
+    stats = await ingest_yfinance(db, client, asof=ASOF, sleeper=no_sleep)
+    assert stats.benchmarks_ok == 2 and stats.benchmarks_failed == 0
+    assert stats.tickers_ok == 1  # benchmarks counted SEPARATELY — honest stats
+    # ticker rows upserted with legal exchange labels; is_covered literal FALSE
+    assert [(r[2], r[1]) for r in db.benchmark_ticker_rows] == [
+        ("^TWII", "TWSE"), ("^GSPC", "US")]
+    insert_sql = next(q for q in db.sql_log if "INSERT INTO ticker" in q)
+    assert "FALSE" in insert_sql  # is_covered=false: never scoring/dashboard scope
+    # benchmark bars landed in price_bar under the benchmark ticker ids
+    bench_ids = set(db.benchmark_ids.values())
+    assert {row[0] for row in db.bar_rows} == {1} | bench_ids
+    # no fundamentals for an index
+    assert len(db.fundamental_rows) == 1
+
+
+async def test_evil_benchmark_symbol_rejected_before_egress():
+    """Exact-membership allowlist: anything not literally in BENCHMARK_SYMBOLS
+    is rejected pre-egress — the ^ never enters SYMBOL_RE."""
+    from app.batch.adapters.yfinance_adapter import IngestStats, _ingest_benchmark
+
+    db = FakeDb([T1])
+    client = ScriptedClient()
+    with pytest.raises(ValueError, match="allowlist"):
+        await _ingest_benchmark(db, client, "^EVIL", IngestStats(), sleeper=no_sleep)
+    assert client.calls == []           # rejected BEFORE any egress
+    assert db.benchmark_ticker_rows == []  # ... and before any DB write
+
+
+async def test_benchmark_failure_is_isolated_and_counted():
+    db = FakeDb([T1])
+    client = ScriptedClient(bars={"2330.TW": [good_bar()],
+                                  "^GSPC": [good_bar(close=5600.0)]},
+                            info={"2330.TW": GOOD_INFO})  # ^TWII returns no bars
+    stats = await ingest_yfinance(db, client, asof=ASOF, sleeper=no_sleep)
+    assert stats.benchmarks_ok == 1 and stats.benchmarks_failed == 1
+    assert any("^TWII" in f for f in stats.failures)  # named, never silent
+    assert stats.tickers_failed == 0  # covered population unaffected
+
+
+async def test_fixture_benchmark_bars_deterministic():
+    """Fixture mode serves benchmark bars offline (CI gate) — same generator,
+    byte-stable across runs, 2y backfill depth."""
+    c1, c2 = FixtureYFinanceClient(), FixtureYFinanceClient()
+    bars1 = c1.fetch_daily_bars("^TWII", "2y")
+    assert bars1 == c2.fetch_daily_bars("^TWII", "2y")
+    assert len(bars1) > 300
+    db = FakeDb([T1])
+    stats = await ingest_yfinance(db, FixtureYFinanceClient(), asof=ASOF,
+                                  sleeper=no_sleep)
+    assert stats.benchmarks_ok == 2
+    bench_ids = set(db.benchmark_ids.values())
+    assert bench_ids and bench_ids <= {row[0] for row in db.bar_rows}
