@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir uv && uv pip install --system -r pyproject.toml
 COPY app ./app
 COPY db ./db
 COPY scripts ./scripts
+COPY config ./config
 COPY openapi.yaml ./
 
 EXPOSE 8000
