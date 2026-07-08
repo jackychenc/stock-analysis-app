@@ -71,6 +71,15 @@ def _run_full_case(inp: dict):
         kwargs["subfields_complete"] = {"chip": False}
         kwargs["notes"] = {
             "chip": "3-institution nets only; margin/block unavailable"}
+    # GF-NEWS-* (v1.2.8 §4a): the fixture's adapter-state keys map onto the
+    # exact engine inputs the pipeline produces. Outage/ticker-error cases
+    # already arrive as news∉available (signal None); the clean-empty case
+    # arrives as news=0.0 + the load-bearing count-0 note. The upstream
+    # error-vs-empty divergence itself is pinned by the dedicated T12 tests.
+    if (inp.get("news_source_status") == "ok"
+            and inp.get("news_headline_count") == 0
+            and not inp.get("news_ticker_query_error")):
+        kwargs.setdefault("notes", {})["news"] = "0 headlines in window"
     return compute_recommendation(signals, target_inputs=target_inputs, **kwargs)
 
 
@@ -95,6 +104,13 @@ def _assert_full_case(case: dict) -> None:
                         if b["module"] == module)
             if field.endswith("_nonempty"):
                 assert bool(item.get(field.removesuffix("_nonempty"))), key
+            elif field == "headline_count":
+                # GF-NEWS-empty-neutral: headline_count=0 is surfaced through
+                # the §4a note channel ("0 headlines in window") — schema and
+                # OpenAPI carry no dedicated count field (A3 ruling).
+                assert expected == 0, key
+                assert item.get("subfields_note") == "0 headlines in window", (
+                    key, item.get("subfields_note"))
             else:
                 assert item.get(field) == expected, (key, item.get(field))
         elif key == "chip_signal_null":

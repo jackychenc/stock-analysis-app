@@ -89,6 +89,47 @@
                  "weight_effective": {"technical": 0.30, "fundamental": 0.30, "chip": 0.25, "news": 0.15},
                  "note": "Binds to contract v1.2.6 §9 (A3, cites this fixture): the structured honest-surfacing field is PerModuleBreakdown.subfields_complete (bool, default true) + optional subfields_note. BINDING assertions: chip breakdown status='ok' (NOT unavailable), subfields_complete=false, subfields_note non-empty (e.g. '3-institution nets only; margin/block unavailable'), chip signal non-null in [-2,2], data_completeness=1.00 (module-level, chip counts), renormalisation_triggered=false, weight_effective unchanged. subfields_complete=true elsewhere. The chip signal NUMBER is engine-computed from available sub-fields (A5-owned, not frozen). Point: partial chip = OK-with-structured-visible-partial, NEVER unavailable AND NEVER silently-full. JSONB shape only — no DB DDL. Verify field names against the candidate's OpenAPI/§9 via git show at gate."}
     },
+    {
+      "id": "GF-NEWS-empty-neutral",
+      "desc": "News SOURCE ok but ticker has 0 headlines in-window (A1 ruling 2026-07-08, task #12): news module = OK with neutral 0.0, FULL completeness, NO renormalisation. Absence of news about a quiet ticker is REAL information, not degraded data (deck 'neutral if unavailable' intent) — treating quiet small-caps as outages would permanently punish their completeness for something true. Honesty: breakdown carries headline_count=0 (empty items[], headline_metric '0 headlines in window') so neutral-from-SILENCE is never mistaken for measured-neutral-from-analysis. 0.0 participates in FR-28 confidence (Hold-consistent) with NO special-casing. Dedicated-binding case (needs adapter status model + headline_count), like GF-CHIP-PARTIAL — not the generic scoring loop.",
+      "input": {"signals": {"technical": 1.2, "fundamental": 0.8, "chip": 1.5, "news": 0.0},
+                "available": ["technical","fundamental","chip","news"],
+                "news_source_status": "ok", "news_headline_count": 0},
+      "expect": {"per_module_breakdown.news.status": "ok",
+                 "per_module_breakdown.news.signal_score": 0.0,
+                 "per_module_breakdown.news.headline_count": 0,
+                 "data_completeness": 1.00,
+                 "renormalisation_triggered": false,
+                 "reduced_confidence": false,
+                 "weight_effective": {"technical": 0.30, "fundamental": 0.30, "chip": 0.25, "news": 0.15},
+                 "note": "BINDING: news status='ok', signal 0.0, headline_count=0 surfaced in breakdown, dc=1.00 (news counts), NO renormalisation, weight_effective unchanged. Composite is engine-computed (not asserted here — this pins the news-empty HANDLING, not the number). This is the news analog of GF-CHIP-PARTIAL: same honesty principle, OPPOSITE completeness outcome (empty news = full/neutral; empty margin/block = ok-but-flagged-partial)."}
+    },
+    {
+      "id": "GF-NEWS-source-outage",
+      "desc": "News SOURCE outage / fetch failure (GDELT unreachable or parse failure) (A1 ruling state 1): news module = UNAVAILABLE -> renormalise over the 3 survivors + Reduced Confidence + completeness hit (FR-34, exactly the #10-gated path). MUST NOT be conflated with GF-NEWS-empty-neutral. Outage != empty.",
+      "input": {"signals": {"technical": 1.2, "fundamental": 0.8, "chip": 1.5},
+                "available": ["technical","fundamental","chip"],
+                "news_source_status": "unavailable"},
+      "expect": {"per_module_breakdown.news.status": "unavailable",
+                 "per_module_breakdown.news.signal_score": null,
+                 "data_completeness": 0.75,
+                 "renormalisation_triggered": true,
+                 "reduced_confidence": true,
+                 "weight_effective": {"technical": 0.3529, "fundamental": 0.3529, "chip": 0.2941, "news": 0.0000},
+                 "note": "renormalise {tech .30, fund .30, chip .25} over 0.85 -> .3529/.3529/.2941 (4dp, sum≈1.0), news 0.0000. Same shape as GF-B but the down-module is news, driven by source_status=unavailable NOT a 0-headline empty result."}
+    },
+    {
+      "id": "GF-NEWS-ticker-query-error",
+      "desc": "BOUNDARY (A1 ruling, for A3 to encode in-contract): news SOURCE returns ok but the TICKER-LEVEL query ERRORS (vs legitimately empty) -> that ticker's news = UNAVAILABLE (state 1), NOT neutral 0.0. ERROR != EMPTY. Guards against a query error being silently laundered into a 'quiet ticker' neutral — which would hide a real fetch problem behind a confident-looking full completeness.",
+      "input": {"signals": {"technical": 1.2, "fundamental": 0.8, "chip": 1.5},
+                "available": ["technical","fundamental","chip"],
+                "news_source_status": "ok", "news_ticker_query_error": true},
+      "expect": {"per_module_breakdown.news.status": "unavailable",
+                 "data_completeness": 0.75,
+                 "renormalisation_triggered": true,
+                 "reduced_confidence": true,
+                 "note": "source-ok + ticker-error -> UNAVAILABLE (state 1), NOT neutral. The discriminator vs GF-NEWS-empty-neutral is source-ok+genuinely-0-headlines (ok/0.0) versus source-ok+ticker-query-error (unavailable). Adapter status model must distinguish fetch-failure / empty-result / ticker-error from day one."}
+    },
 
     {"id": "GF-BAND-SS", "desc": "band: below -1.5 -> Strong Sell", "input": {"composite_signal": -1.51}, "expect": {"composite_call": "STRONG_SELL"}},
     {"id": "GF-BAND-SS-edge", "desc": "band: exactly -1.5 -> milder -> Sell", "input": {"composite_signal": -1.50}, "expect": {"composite_call": "SELL"}},
