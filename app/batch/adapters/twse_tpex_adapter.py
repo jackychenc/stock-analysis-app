@@ -71,6 +71,28 @@ def _parse_tw_int(value: Any) -> int | None:
     return _int(value)
 
 
+def _roc_to_gregorian(value: str) -> date | None:
+    """TPEx (and some TWSE surfaces) report ROC/Minguo dates: '1150707' =
+    ROC year 115 -> 2026-07-07 (A7 live pre-flight — parsing as ISO would
+    silently corrupt trade_date). Accepts 6-7 digit ROC or 8-digit Gregorian."""
+    digits = "".join(ch for ch in str(value) if ch.isdigit())
+    try:
+        if len(digits) == 8:  # already Gregorian YYYYMMDD
+            return date(int(digits[:4]), int(digits[4:6]), int(digits[6:8]))
+        if len(digits) in (6, 7):  # ROC: [Y]YYMMDD
+            return date(int(digits[:-4]) + 1911, int(digits[-4:-2]), int(digits[-2:]))
+    except ValueError:
+        return None
+    return None
+
+
+def _normalize_key(key: str) -> str:
+    """TPEx field names have irregular whitespace (leading spaces, spaces
+    before dashes, mid-word spaces) and near-duplicate keys — strip ALL
+    whitespace and casefold before matching (A7 live pre-flight gotcha #2)."""
+    return "".join(str(key).split()).casefold()
+
+
 def _latest_weekday(today: date) -> date:
     d = today
     while d.weekday() >= 5:
@@ -90,15 +112,21 @@ class RealTwseTpexClient:
 
     def __init__(self, asof: date | None = None):
         self._asof = _latest_weekday(asof or date.today())
-        self._cache: dict[str, dict[str, dict[str, int | None]]] = {}
+        self._cache: dict[str, dict[str, dict[str, Any]]] = {}
+        self._response_date: dict[str, date | None] = {}
 
     def fetch_daily_chip(self, symbol: str, exchange: str) -> list[dict[str, Any]]:
         table = self._market_table(exchange)
         nets = table.get(symbol)
         if nets is None:
             return []  # no 3-institution activity reported for this code today
+        # trade_date comes from the RESPONSE (ROC->Gregorian), never the local
+        # clock — a holiday/publication-lag day would otherwise mislabel rows.
+        row_date = nets.pop("trade_date", None) or self._response_date.get(exchange)
+        if row_date is None:
+            raise ValueError(f"{exchange} response carried no parseable trade date")
         return [{
-            "trade_date": self._asof,
+            "trade_date": row_date,
             **nets,
             "margin_balance": None,      # separate endpoint — known limitation
             "block_trade_volume": None,  # separate endpoint — known limitation
@@ -116,6 +144,8 @@ class RealTwseTpexClient:
                                       max_bytes=MAX_RESPONSE_BYTES))
         if payload.get("stat") != "OK":
             raise ValueError(f"TWSE T86 returned stat={payload.get('stat')!r}")
+        # Response-declared date (Gregorian or ROC) is authoritative for rows.
+        self._response_date["TWSE"] = _roc_to_gregorian(payload.get("date", ""))
         fields = payload.get("fields") or []
 
         def col(*names: str) -> int:
@@ -137,29 +167,35 @@ class RealTwseTpexClient:
             }
         return table
 
-    def _fetch_tpex(self) -> dict[str, dict[str, int | None]]:
+    # Normalized TPEx field names per A7's live schema dump (2026-07-08).
+    # foreign_net convention LOCKED by Cindy: "include Mainland Area Investors
+    # (Foreign Dealers excluded)" — avoids double-counting dealer_net.
+    _TPEX_FOREIGN_KEYS = (
+        "foreigninvestorsincludemainlandareainvestors(foreigndealersexcluded)-difference",
+        "foreigninvestorsincludemainlandareainvestors-difference",
+    )
+    _TPEX_TRUST_KEY = "securitiesinvestmenttrustcompanies-difference"
+    _TPEX_DEALER_KEY = "dealers-difference"
+    _TPEX_CODE_KEY = "securitiescompanycode"
+    _TPEX_DATE_KEY = "date"
+
+    def _fetch_tpex(self) -> dict[str, dict[str, Any]]:
         payload = json.loads(http_get(_TPEX_3INSTI_URL, allowed_hosts=ALLOWED_HOSTS,
                                       max_bytes=MAX_RESPONSE_BYTES))
 
-        def pick(row: dict, *candidates: str) -> Any:
-            for key in candidates:
-                if key in row:
-                    return row[key]
-            return None
-
-        table: dict[str, dict[str, int | None]] = {}
+        table: dict[str, dict[str, Any]] = {}
         for row in payload:
-            code = pick(row, "SecuritiesCompanyCode", "Code", "股票代號")
+            norm = {_normalize_key(k): v for k, v in row.items()}
+            code = norm.get(self._TPEX_CODE_KEY)
             if code is None:
                 continue
+            foreign = next(
+                (norm[k] for k in self._TPEX_FOREIGN_KEYS if k in norm), None)
             table[str(code).strip()] = {
-                "foreign_net": _parse_tw_int(pick(
-                    row, "ForeignInvestorsNetBuySell",
-                    "ForeignInvestmentNetBuySell", "ForeignNetBuySell")),
-                "investment_trust_net": _parse_tw_int(pick(
-                    row, "InvestmentTrustNetBuySell", "SITCNetBuySell")),
-                "dealer_net": _parse_tw_int(pick(
-                    row, "DealersNetBuySell", "DealerNetBuySell")),
+                "trade_date": _roc_to_gregorian(norm.get(self._TPEX_DATE_KEY, "")),
+                "foreign_net": _parse_tw_int(foreign),
+                "investment_trust_net": _parse_tw_int(norm.get(self._TPEX_TRUST_KEY)),
+                "dealer_net": _parse_tw_int(norm.get(self._TPEX_DEALER_KEY)),
             }
         return table
 

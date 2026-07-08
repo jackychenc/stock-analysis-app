@@ -467,3 +467,48 @@ async def test_edgar_fixture_mode_is_deterministic_and_multi_filer():
     # curated filers all cover the mapped AAPL cusip -> multi-filer rows
     assert len(db1.rows) == 2
     assert {r[2] for r in db1.rows} == {FILER_A.cik, FILER_B.cik}
+
+
+# --- A7 live pre-flight fixes: ROC dates + normalized TPEx keys ----------------
+
+def test_roc_date_conversion():
+    from app.batch.adapters.twse_tpex_adapter import _roc_to_gregorian
+
+    assert _roc_to_gregorian("1150707") == date(2026, 7, 7)   # ROC 115
+    assert _roc_to_gregorian("990101") == date(2010, 1, 1)    # ROC 99 (6-digit)
+    assert _roc_to_gregorian("20260707") == date(2026, 7, 7)  # Gregorian passthrough
+    assert _roc_to_gregorian("115/07/07") == date(2026, 7, 7) # separator-tolerant
+    assert _roc_to_gregorian("garbage") is None
+    assert _roc_to_gregorian("1151399") is None               # impossible month
+
+
+def test_tpex_normalized_key_matching_against_live_schema():
+    """Uses A7's ACTUAL live key dump: leading spaces, spaces before dashes,
+    mid-word spaces, near-duplicate keys — exact literals must not be relied on."""
+    from app.batch.adapters.twse_tpex_adapter import RealTwseTpexClient
+
+    live_row = {
+        "Date": "1150707",  # ROC
+        "SecuritiesCompanyCode": "6488",
+        "Dealers-Difference": "-1200",
+        "Dealers -TotalSell": "9999",  # near-dupe with odd space — must not confuse
+        "SecuritiesInvestmentTrustCompanies-Difference": "3400",
+        "Foreign Investors include Mainland Area Investors "
+        "(Foreign Dealers excluded)-Difference": "5600",
+        "ForeignInvestorsInclude MainlandAreaInvestors-Difference": "9100",
+        " Foreign Investors include Mainland Area Investors "
+        "(Foreign Dealers excluded)-Total Sell": "1",
+    }
+    client = RealTwseTpexClient.__new__(RealTwseTpexClient)  # no network
+    client._cache = {}
+    client._response_date = {}
+    import json as _json
+    from unittest.mock import patch
+    with patch("app.batch.adapters.twse_tpex_adapter.http_get",
+               return_value=_json.dumps([live_row]).encode()):
+        table = client._fetch_tpex()
+    row = table["6488"]
+    assert row["trade_date"] == date(2026, 7, 7)      # ROC converted, not ISO
+    assert row["dealer_net"] == -1200                  # signed, right key
+    assert row["investment_trust_net"] == 3400
+    assert row["foreign_net"] == 5600                  # dealers-EXCLUDED convention
