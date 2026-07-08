@@ -64,8 +64,11 @@ _TWSE_MARGIN_URL = ("https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN"
                     "?date={yyyymmdd}&selectType=ALL&response=json")
 _TWSE_BLOCK_URL = ("https://www.twse.com.tw/rwd/zh/block/BFIAUU"
                    "?date={yyyymmdd}&response=json")
-_TPEX_MARGIN_URL = "https://www.tpex.org.tw/openapi/v1/tpex_mgtrade_daily_trading"
-_TPEX_BLOCK_URL = "https://www.tpex.org.tw/openapi/v1/tpex_block_day_trading"
+# A7 live pre-flight (2026-07-08) settled the real TPEx paths:
+_TPEX_MARGIN_URL = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_margin_balance"
+# TPEx block trades (tpex_daily_trade_block_day) expose only company Name —
+# NO ticker code field — so TPEx block volume cannot be joined to ticker_id.
+# It stays a structurally-honest NULL with a named gap (see _fetch_tpex_block).
 
 # A8 #4: bounds beyond NaN — poisoned upstream values must not land in the DB.
 _MAX_CHIP_MAGNITUDE = 10_000_000_000_000  # 1e13 shares/lots is not a real market
@@ -253,23 +256,16 @@ class RealTwseTpexClient:
         return table
 
     def _fetch_tpex_block(self) -> dict[str, tuple[int | None, date | None]]:
-        payload = json.loads(http_get(_TPEX_BLOCK_URL, allowed_hosts=ALLOWED_HOSTS,
-                                      max_bytes=MAX_RESPONSE_BYTES))
-        table: dict[str, tuple[int | None, date | None]] = {}
-        for row in payload:
-            norm = {_normalize_key(k): v for k, v in row.items()}
-            code = norm.get(self._TPEX_CODE_KEY)
-            if code is None:
-                continue
-            vol_i = _parse_tw_int(next(
-                (norm[k] for k in self._TPEX_BLOCK_VOL_KEYS if k in norm), None))
-            d = _roc_to_gregorian(norm.get(self._TPEX_DATE_KEY, ""))
-            code_s = str(code).strip()
-            prev = table.get(code_s)
-            if prev and prev[0] is not None and vol_i is not None:
-                vol_i += prev[0]  # sum multiple prints per code
-            table[code_s] = (vol_i, d)
-        return table
+        # A7 live pre-flight: the TPEx block endpoint (tpex_daily_trade_block_day)
+        # carries only the company Name — no ticker code — so block volume is
+        # UNJOINABLE to ticker_id. Raise before any egress: the aux framework
+        # records the named gap (visible completeness for #10); a curated
+        # name→code map is a possible future product decision, not silently
+        # improvised here.
+        raise ValueError(
+            "TPEx block endpoint exposes no ticker code (name-only) — "
+            "block_trade_volume stays NULL for TPEx tickers"
+        )
 
     def _market_table(self, exchange: str) -> dict[str, dict[str, int | None]]:
         if exchange not in self._cache:
@@ -333,11 +329,8 @@ class RealTwseTpexClient:
     _TPEX_DATE_KEY = "date"
     # Task #18 candidate keys (normalized) — A7 pre-flight settles the live set.
     _TPEX_MARGIN_BAL_KEYS = (
+        "marginpurchasebalance",          # confirmed by A7 live dump
         "margintransactionstodaybalance", "margintodaybalance",
-        "marginpurchasetodaybalance", "todaybalance",
-    )
-    _TPEX_BLOCK_VOL_KEYS = (
-        "tradingvolume", "tradevolume", "volume", "transactionvolume",
     )
 
     def _fetch_tpex(self) -> dict[str, dict[str, Any]]:

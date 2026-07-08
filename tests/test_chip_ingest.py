@@ -583,47 +583,47 @@ TPEX_NETS_ROW = {
 }
 
 
-def test_t18_margin_block_merged_when_dates_match():
+def test_t18_tpex_margin_merged_when_dates_match_and_block_named_gap():
+    # Margin: corrected endpoint (tpex_mainboard_margin_balance) with A7's
+    # confirmed field MarginPurchaseBalance. Block: TPEx endpoint has no
+    # ticker code -> structurally-honest NULL + named gap, ZERO egress.
     client, http_patch = _client_with_mocked_http({
         "tpex_3insti": [TPEX_NETS_ROW],
-        "tpex_mgtrade": [{"Date": "1150707", "SecuritiesCompanyCode": "6488",
-                          "MarginTransactionsTodayBalance": "12,345"}],
-        "tpex_block": [{"Date": "1150707", "SecuritiesCompanyCode": "6488",
-                        "TradingVolume": "5,000"}],
+        "tpex_mainboard_margin_balance": [
+            {"Date": "1150707", "SecuritiesCompanyCode": "6488",
+             "MarginPurchaseBalance": "12,345"}],
     })
     with http_patch:
         rows = client.fetch_daily_chip("6488", "TPEx")
     assert rows[0]["margin_balance"] == 12345
-    assert rows[0]["block_trade_volume"] == 5000
+    assert rows[0]["block_trade_volume"] is None
     assert rows[0]["trade_date"] == date(2026, 7, 7)
+    assert any("no ticker code" in n for n in client.aux_notes)  # gap NAMED
 
 
 def test_t18_date_mismatch_yields_null_never_cross_day_blend():
     client, http_patch = _client_with_mocked_http({
         "tpex_3insti": [TPEX_NETS_ROW],
-        "tpex_mgtrade": [{"Date": "1150704", "SecuritiesCompanyCode": "6488",
-                          "MarginTransactionsTodayBalance": "12,345"}],  # older day
-        "tpex_block": [{"Date": "1150707", "SecuritiesCompanyCode": "6488",
-                        "TradingVolume": "5,000"}],
+        "tpex_mainboard_margin_balance": [
+            {"Date": "1150704", "SecuritiesCompanyCode": "6488",
+             "MarginPurchaseBalance": "12,345"}],  # older day
     })
     with http_patch:
         rows = client.fetch_daily_chip("6488", "TPEx")
     assert rows[0]["margin_balance"] is None      # stale margin NOT blended
-    assert rows[0]["block_trade_volume"] == 5000  # matching block still merges
 
 
 def test_t18_aux_endpoint_failure_never_blocks_nets():
     client, http_patch = _client_with_mocked_http({
         "tpex_3insti": [TPEX_NETS_ROW],
-        "tpex_mgtrade": RuntimeError("HTTP 503"),
-        "tpex_block": RuntimeError("HTTP 503"),
+        "tpex_mainboard_margin_balance": RuntimeError("HTTP 503"),
     })
     with http_patch:
         rows = client.fetch_daily_chip("6488", "TPEx")
     assert rows[0]["foreign_net"] == 300          # nets intact
     assert rows[0]["margin_balance"] is None      # honest NULL
     assert rows[0]["block_trade_volume"] is None
-    assert len(client.aux_notes) == 2             # gaps NAMED, not hidden
+    assert len(client.aux_notes) == 2             # margin 503 + block no-code
 
 
 def test_t18_twse_margin_table_detection_and_block_print_sum():
