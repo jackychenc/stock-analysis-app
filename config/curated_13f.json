@@ -1,0 +1,22 @@
+{
+  "_rationale": "Task #9 (PM condition): curated 13F universe, not a full EDGAR crawl. Filers = ~12 of the largest US institutional managers by 13F AUM — their aggregate position changes are the 'smart money' signal input the chip module needs (FR-14), while keeping EDGAR egress tiny and polite (R-01). cusip_map covers only tickers we can map with confidence; an unmapped US ticker honestly yields NO 13F rows (task #10 reads that as chip-unavailable — never fabricated). CIKs are zero-padded 10-digit strings per EDGAR convention; this file is config data, editable without a deploy. 13F data is quarterly positioning with a ~45-day filing delay (R-04 / FR-16) — never presented as live.",
+  "filers": [
+    {"cik": "0001067983", "name": "Berkshire Hathaway Inc"},
+    {"cik": "0001364742", "name": "BlackRock Inc."},
+    {"cik": "0000102909", "name": "Vanguard Group Inc"},
+    {"cik": "0000093751", "name": "State Street Corp"},
+    {"cik": "0000315066", "name": "FMR LLC"},
+    {"cik": "0001113169", "name": "T. Rowe Price Associates Inc"},
+    {"cik": "0001214717", "name": "Geode Capital Management LLC"},
+    {"cik": "0000895421", "name": "Morgan Stanley"},
+    {"cik": "0000019617", "name": "JPMorgan Chase & Co"},
+    {"cik": "0001582202", "name": "Norges Bank"},
+    {"cik": "0000104188", "name": "Capital World Investors"},
+    {"cik": "0000902219", "name": "Wellington Management Group LLP"}
+  ],
+  "cusip_map": {
+    "AAPL": "037833100",
+    "MSFT": "594918104",
+    "NVDA": "67066G104"
+  }
+}

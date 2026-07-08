@@ -2,17 +2,30 @@
 → persist) with per-source isolation (§22.4: one adapter failure never aborts
 peers).
 
-Task #8: yfinance (price_bar + fundamental) is LIVE. Chip (task #9), news
-(task #12) remain honest 'unavailable' stubs; signal calculators + scoring are
-task #10. `pipeline_run` rows record ok/unavailable/error per source, feeding
-/pipeline/status and the R-01 consecutive-bad-days alert.
+Task #8: yfinance (price_bar + fundamental) is LIVE. Task #9: chip sources
+twse_tpex (chip_data_tw) + edgar_13f (institutional_position_us) are LIVE —
+two adapters, two pipeline_run rows, independently isolated (T9-O1). News
+(task #12) remains an honest 'unavailable' stub; signal calculators + scoring
+are task #10. `pipeline_run` rows record ok/unavailable/error per source,
+feeding /pipeline/status and the R-01 consecutive-bad-days alert.
 """
 
 import logging
 from datetime import UTC, date, datetime
 
+from app.batch.adapters.common import AdapterUnavailable
+from app.batch.adapters.edgar_adapter import (
+    FixtureEdgarClient,
+    RealEdgarClient,
+    ingest_edgar_13f,
+    load_curated_13f,
+)
+from app.batch.adapters.twse_tpex_adapter import (
+    FixtureTwseTpexClient,
+    RealTwseTpexClient,
+    ingest_twse_tpex,
+)
 from app.batch.adapters.yfinance_adapter import (
-    AdapterUnavailable,
     FixtureYFinanceClient,
     RealYFinanceClient,
     ingest_yfinance,
@@ -25,8 +38,6 @@ logger = logging.getLogger(__name__)
 KNOWN_SOURCES = ("yfinance", "twse_tpex", "edgar_13f", "gdelt")
 
 _NOT_IMPLEMENTED = {
-    "twse_tpex": "adapter lands in roadmap Step 3 (task #9)",
-    "edgar_13f": "adapter lands in roadmap Step 3 (task #9)",
     "gdelt": "adapter lands in roadmap Step 6 (task #12)",
 }
 
@@ -43,6 +54,40 @@ async def _run_yfinance(conn) -> tuple[str, str]:
         return "unavailable", f"[{mode}] {exc}"
     if stats.tickers_failed:
         # Partial success: source is up, but failures are named — never silent.
+        return "ok", f"[{mode}] partial: {stats.summary()}"
+    return "ok", f"[{mode}] {stats.summary()}"
+
+
+async def _run_twse_tpex(conn) -> tuple[str, str]:
+    """TW chip facts -> chip_data_tw. Fixture mode (FR-19/T9-D1) keeps CI off
+    the live TWSE/TPEx OpenAPI (R-01)."""
+    settings = get_settings()
+    fixture = settings.twse_tpex_fixture_mode
+    client = FixtureTwseTpexClient() if fixture else RealTwseTpexClient()
+    mode = "fixture" if fixture else "live"
+    try:
+        stats = await ingest_twse_tpex(conn, client)
+    except AdapterUnavailable as exc:
+        return "unavailable", f"[{mode}] {exc}"
+    if stats.tickers_failed:
+        return "ok", f"[{mode}] partial: {stats.summary()}"
+    return "ok", f"[{mode}] {stats.summary()}"
+
+
+async def _run_edgar_13f(conn) -> tuple[str, str]:
+    """US quarterly positioning (13F, delayed — R-04/FR-16) ->
+    institutional_position_us. Curated filers from config (PM condition);
+    fixture mode keeps CI off live EDGAR."""
+    settings = get_settings()
+    curated = load_curated_13f(settings.curated_13f_path)
+    fixture = settings.edgar_fixture_mode
+    client = FixtureEdgarClient(curated) if fixture else RealEdgarClient()
+    mode = "fixture" if fixture else "live"
+    try:
+        stats = await ingest_edgar_13f(conn, client, curated=curated)
+    except AdapterUnavailable as exc:
+        return "unavailable", f"[{mode}] {exc}"
+    if stats.filers_failed:
         return "ok", f"[{mode}] partial: {stats.summary()}"
     return "ok", f"[{mode}] {stats.summary()}"
 
@@ -67,6 +112,10 @@ async def run_pipeline_once(run_date: date | None = None) -> None:
             try:
                 if source == "yfinance":
                     status, message = await _run_yfinance(conn)
+                elif source == "twse_tpex":
+                    status, message = await _run_twse_tpex(conn)
+                elif source == "edgar_13f":
+                    status, message = await _run_edgar_13f(conn)
                 else:
                     status, message = "unavailable", _NOT_IMPLEMENTED[source]
             except Exception as exc:

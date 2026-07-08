@@ -12,66 +12,47 @@ for every covered ticker. Scope guardrails (Cindy, task #8):
 The network client is injected (YFinanceClient protocol) so unit tests run a
 deterministic fake; RealYFinanceClient is the only code that touches the
 `yfinance` package (imported lazily) — R-01: unofficial, ToS-gray source.
+
+Task #9 extracted the reviewed shared controls (AdapterUnavailable, retries,
+decimal-safe converters, egress allowlist) into adapters/common.py; this
+module re-exports the same public API so nothing upstream changes.
 """
 
 import asyncio
 import logging
-import math
-import re
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from typing import Any, Protocol
+
+from app.batch.adapters.common import (
+    PACING_DELAY_S,
+    REQUEST_TIMEOUT_S,
+    AdapterUnavailable,
+    _int,
+    _num,
+    _with_retries,
+    check_symbol,
+)
+
+__all__ = [
+    "PACING_DELAY_S",
+    "AdapterUnavailable",
+    "FixtureYFinanceClient",
+    "IngestStats",
+    "RealYFinanceClient",
+    "YFinanceClient",
+    "ingest_yfinance",
+]
 
 logger = logging.getLogger(__name__)
 
 BACKFILL_PERIOD = "2y"     # first run per ticker: backtest needs >=12-24mo (§25/7)
 INCREMENTAL_PERIOD = "7d"  # daily runs: short overlap window, upserts dedupe
 
-# A8 #1: allowlist at the adapter boundary — symbols feed outbound URL
-# construction, so a bad ticker row must never shape an egress request.
-_SYMBOL_RE = re.compile(r"^[A-Za-z0-9.\-]{1,12}$")
-
 # A8 #4: bounds beyond NaN — poisoned upstream values must not land in the DB.
 _MAX_PRICE = Decimal("10000000")      # no listed equity trades at 10M/share
 _MAX_VOLUME = 10_000_000_000_000      # 10T shares/day is not a real market
-
-# A8 #3 (mandatory after A7's live 429 pre-flight): explicit outbound timeout,
-# paced requests, bounded retries w/ exponential backoff + jitter — no storms.
-REQUEST_TIMEOUT_S = 15
-PACING_DELAY_S = 2.0        # pause between tickers — stay under Yahoo's radar
-_RETRY_ATTEMPTS = 3
-_RETRY_BASE_DELAY_S = 1.0
-_TRANSIENT_MARKERS = ("429", "too many requests", "rate limit",
-                      "500", "502", "503", "504", "timed out", "timeout")
-
-
-def _is_transient(exc: Exception) -> bool:
-    if isinstance(exc, TimeoutError):
-        return True
-    text = str(exc).lower()
-    return any(marker in text for marker in _TRANSIENT_MARKERS)
-
-
-async def _with_retries(fn, /, *args, sleeper=asyncio.sleep, rng=None) -> Any:
-    """Run blocking client call in a worker thread; retry transient failures
-    (429/5xx/timeouts) with exponential backoff + jitter. Non-transient errors
-    raise immediately (per-ticker isolation handles them). Exhausted retries
-    re-raise the transient error — the source then reads 'unavailable', never
-    a tight-loop hammer (R-01)."""
-    import random
-
-    rng = rng or random.random
-    for attempt in range(1, _RETRY_ATTEMPTS + 1):
-        try:
-            return await asyncio.to_thread(fn, *args)
-        except Exception as exc:
-            if attempt == _RETRY_ATTEMPTS or not _is_transient(exc):
-                raise
-            logger.warning("transient upstream error (attempt %d/%d): %s",
-                           attempt, _RETRY_ATTEMPTS, exc)
-            base = _RETRY_BASE_DELAY_S * (2 ** (attempt - 1))
-            await sleeper(base * (1 + rng() * 0.5))  # jitter: 1.0x..1.5x
 
 
 class YFinanceClient(Protocol):
@@ -153,11 +134,6 @@ class FixtureYFinanceClient:
         }
 
 
-class AdapterUnavailable(Exception):
-    """Raised when the source produced no usable data at all — the pipeline
-    marks the whole source 'unavailable' (never a partial silent success)."""
-
-
 @dataclass
 class IngestStats:
     tickers_ok: int = 0
@@ -174,31 +150,6 @@ class IngestStats:
         if self.failures:
             msg += f"; failures: {'; '.join(self.failures)}"
         return msg
-
-
-def _num(value: Any) -> Decimal | None:
-    """Decimal-safe conversion; NaN/None/garbage -> None."""
-    if value is None:
-        return None
-    try:
-        f = float(value)
-    except (TypeError, ValueError):
-        return None
-    if math.isnan(f) or math.isinf(f):
-        return None
-    return Decimal(str(value)) if not isinstance(value, float) else Decimal(repr(f))
-
-
-def _int(value: Any) -> int | None:
-    if value is None:
-        return None
-    try:
-        f = float(value)
-    except (TypeError, ValueError):
-        return None
-    if math.isnan(f) or math.isinf(f):
-        return None
-    return int(f)
 
 
 # fundamental column <- yfinance info key
@@ -296,10 +247,8 @@ async def _ingest_one(
     stats: IngestStats,
     sleeper=asyncio.sleep,
 ) -> None:
-    # A8 #1: allowlist before any egress. fullmatch (Y-1): `$` would admit a
-    # trailing newline — this regex IS the SSRF boundary, so match exactly.
-    if not _SYMBOL_RE.fullmatch(symbol):
-        raise ValueError("symbol rejected by egress allowlist")
+    # A8 #1 / Y-1: fullmatch allowlist before any egress (common.check_symbol).
+    check_symbol(symbol)
 
     have_bars = await conn.fetchval(
         "SELECT count(*) FROM price_bar WHERE ticker_id = $1", ticker_id

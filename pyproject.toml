@@ -14,6 +14,7 @@ dependencies = [
     "itsdangerous>=2.2",
     "apscheduler>=3.10,<4",
     "yfinance>=0.2.50",
+    "defusedxml>=0.7",  # A8: XXE-safe parsing of EDGAR 13F XML (task #9)
 ]
 
 [dependency-groups]
