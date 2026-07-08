@@ -30,10 +30,28 @@ docker compose up --build
 ```
 
 - API: <http://localhost:8000> — interactive OpenAPI at `/docs`, liveness at `/healthz`
-- Web: <http://localhost:3000>
+- Web: <http://localhost:3000> (opt-in: `docker compose --profile web up`)
 - DB schema loads automatically on first `db` init (`db/schema.sql`)
 - Seed tickers: `docker compose exec api python scripts/seed.py`
-- Trigger the batch skeleton on demand: `POST /api/v1/pipeline/run-now` (auth required)
+- Trigger the batch on demand: `POST /api/v1/pipeline/run-now` (auth required)
+
+### Batch topology (ADR-008, contract v1.2.7)
+
+LIVE ingestion runs **on the host**, not in a container — the container VM's
+egress IP is blocked by TPEx's Cloudflare WAF (task #19). From the repo root:
+
+```bash
+export DATABASE_URL=postgresql+psycopg://stockapp:stockapp@127.0.0.1:5432/stockapp
+export REDIS_URL=redis://127.0.0.1:6379/0
+export APP_ENCRYPTION_KEY=...        # same key as the api container (.env)
+export ENV=local
+uv run python -m app.batch.scheduler # daily 03:00 TW
+```
+
+DB/Redis ports stay loopback-only; the host batch is on the same machine, so
+no exposure is widened. Fixture-mode batch (deterministic, no live egress —
+used by FR-19 gates) can still run in-container:
+`docker compose --profile fixture-batch up`.
 
 ### Without Docker (backend dev loop)
 

@@ -1,9 +1,9 @@
 # Local-host testing stack — CURRENT deployment target (per @jackychenc 2026-07-08).
-# `docker compose up` brings up db + redis + api. Batch runs ON THE HOST (ADR-008).
-# API: http://localhost:8000 (/docs = OpenAPI) · Web (opt-in profile): http://localhost:3000
+# `docker compose up` brings up db + redis + api + batch. API at http://127.0.0.1:8000.
+# Web (Next.js) is roadmap step 8 — added as a `web` service (127.0.0.1:3000) then, not in Foundation.
+# All host port bindings are pinned to 127.0.0.1 (loopback only) for local-security gate (task #7).
 # Secrets come from .env (see .env.example) — never commit real keys.
-# Source: A3 contract bundle v1.2.7 docker-compose.yml, merged with repo fixes
-# that postdate it: F-1 env_file secrets, db/schema.sql path, web service.
+version: "3.9"
 
 services:
   db:
@@ -15,7 +15,7 @@ services:
     ports: ["127.0.0.1:5432:5432"]
     volumes:
       - db_data:/var/lib/postgresql/data
-      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stockapp}"]
       interval: 5s
@@ -34,13 +34,11 @@ services:
   api:
     build: { context: ., dockerfile: Dockerfile }
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-    # F-1 fix: secrets load via env_file (literal, no ${} interpolation) —
-    # compose interpolation corrupts $-delimited values like the pbkdf2
-    # ADMIN_PASSWORD_HASH. The app fail-closes on missing/weak JWT_SECRET.
-    env_file: [.env]
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-stockapp}:${POSTGRES_PASSWORD:-stockapp}@db:5432/${POSTGRES_DB:-stockapp}
       REDIS_URL: redis://redis:6379/0
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?set APP_ENCRYPTION_KEY in .env}  # pgcrypto key (NFR-05)
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       ENV: local
     ports: ["127.0.0.1:8000:8000"]
     depends_on:
@@ -48,50 +46,24 @@ services:
       redis: { condition: service_healthy }
 
   # ─────────────────────────────────────────────────────────────────
-  # LIVE batch runs ON THE HOST, not as a container (ADR-008, task #19).
+  # BATCH runs ON THE HOST, not as a container (ADR-008, task #19).
   # The colima VM's egress IP is blocked by TPEx's Cloudflare WAF, so a
   # containerized batch can't reach the TW data sources; the Mac host can.
-  # Run it on the host (Python 3.12 + uv), pointing at the containerized
-  # Postgres/Redis over loopback:
+  # Run it on the host (needs Python 3.12 + uv, user-scope Homebrew), pointing
+  # at the containerized Postgres/Redis over loopback:
   #
   #   # from repo root, host shell:
   #   export DATABASE_URL=postgresql+psycopg://stockapp:stockapp@127.0.0.1:5432/stockapp
   #   export REDIS_URL=redis://127.0.0.1:6379/0
-  #   export APP_ENCRYPTION_KEY=...   # from .env; same key as the api container
+  #   export APP_ENCRYPTION_KEY=...   # from host .env; same key as the api container
   #   export ENV=local
   #   uv run python -m app.batch.scheduler          # daily 03:00 TW
   #   # or one-shot: uv run python -m app.batch.run_now
   #
-  # DB/Redis ports are loopback-only (127.0.0.1) — the host batch is on the
-  # same machine, so no exposure is widened. Fixture-mode (no live egress)
-  # can still run in-container per ADR-008; opt in with:
-  #   docker compose --profile fixture-batch up
+  # DB/Redis ports are loopback-only (127.0.0.1) — the host batch is on the same
+  # machine, so no exposure is widened. Fixture-mode (no live egress) can still run
+  # in-container; only the LIVE TW-source ingestion must run on the host.
   # ─────────────────────────────────────────────────────────────────
-  batch:
-    build: { context: ., dockerfile: Dockerfile }
-    profiles: ["fixture-batch"]
-    # Fixture-mode ONLY (deterministic FR-19 gates). LIVE ingestion must run
-    # on the host — see ADR-008 block above.
-    command: python -m app.batch.scheduler
-    env_file: [.env]
-    environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-stockapp}:${POSTGRES_PASSWORD:-stockapp}@db:5432/${POSTGRES_DB:-stockapp}
-      REDIS_URL: redis://redis:6379/0
-      ENV: local
-    depends_on:
-      db: { condition: service_healthy }
-      redis: { condition: service_healthy }
-
-  # Web skeleton — full UI is roadmap step 8 (contract v1.2.1 keeps it out of
-  # the default Foundation stack). Opt in: docker compose --profile web up
-  web:
-    build: { context: ./web, dockerfile: Dockerfile }
-    profiles: ["web"]
-    environment:
-      API_BASE_URL: http://api:8000/api/v1
-    ports: ["127.0.0.1:3000:3000"]
-    depends_on:
-      - api
 
 volumes:
   db_data:
