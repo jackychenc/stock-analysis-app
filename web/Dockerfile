@@ -3,6 +3,9 @@ WORKDIR /srv/web
 COPY package.json ./
 RUN npm install
 COPY . .
+# Next.js bakes rewrite destinations at BUILD time (routes-manifest), so the
+# in-cluster API target must be set here — runtime env cannot change it.
+ENV API_BASE_URL=http://api:8000/api/v1
 RUN npm run build
 
 FROM node:22-alpine
