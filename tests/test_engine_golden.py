@@ -63,7 +63,15 @@ def _run_full_case(inp: dict):
             peer_median_pe=D(ti.get("peer_median_PE")),
             trailing_eps=D(ti.get("trailing_EPS")),
         )
-    return compute_recommendation(signals, target_inputs=target_inputs)
+    kwargs = {}
+    # GF-CHIP-PARTIAL (v1.2.6 §9): chip sub-field gaps flow in as
+    # subfields_complete=false + note — availability/renorm untouched.
+    sub = inp.get("chip_subfield_status")
+    if sub and any(v is None for v in sub.values()):
+        kwargs["subfields_complete"] = {"chip": False}
+        kwargs["notes"] = {
+            "chip": "3-institution nets only; margin/block unavailable"}
+    return compute_recommendation(signals, target_inputs=target_inputs, **kwargs)
 
 
 def _assert_full_case(case: dict) -> None:
@@ -81,6 +89,20 @@ def _assert_full_case(case: dict) -> None:
             got_dec = getattr(result, key)
             got = None if got_dec is None else float(got_dec)
             assert got == expected, (key, got, expected)
+        elif key.startswith("per_module_breakdown."):
+            _, module, field = key.split(".", 2)
+            item = next(b for b in result.per_module_breakdown
+                        if b["module"] == module)
+            if field.endswith("_nonempty"):
+                assert bool(item.get(field.removesuffix("_nonempty"))), key
+            else:
+                assert item.get(field) == expected, (key, item.get(field))
+        elif key == "chip_signal_null":
+            chip = next(b for b in result.per_module_breakdown
+                        if b["module"] == "chip")
+            assert (chip["signal_score"] is None) == expected, key
+        elif key == "renormalisation_triggered":
+            assert result.reduced_confidence == expected, key
         else:
             assert getattr(result, key) == expected, (key, expected)
 

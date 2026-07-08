@@ -73,6 +73,22 @@
                  "target_fundamental_usable": true,
                  "note": "FULL-DATA state: weight_effective == weight_assigned (NO renormalisation, completeness 1.0) — must NOT be 0.0. composite raw 0.425 -> half-up 0.43; HOLD glyph must be NEUTRAL (grey), NOT green-up (composite_signal +0.43 sign must NOT drive the call glyph). confidence = count(|signal|<=0.75)=0/4."}
     },
+    {
+      "id": "GF-CHIP-PARTIAL-intra-module",
+      "desc": "Chip module OK with intra-module partial: 3-institution nets present but margin/block NULL (or the permanent TPEx-block gap). A3 §1/§2/§4 clarification + A6 D2: chip stays 'ok' and contributes its signal from available sub-fields; margin/block NULL is INTRA-module completeness (flagged in breakdown), NOT module-unavailable -> does NOT trigger §4 renormalisation, does NOT reduce module-level data_completeness. Guards against silently rendering partial chip as full.",
+      "input": {"signals": {"technical": 1.2, "fundamental": 0.8, "chip": 1.5, "news": -0.5},
+                "available": ["technical","fundamental","chip","news"],
+                "chip_subfield_status": {"institutional_nets": "present", "margin_balance": null, "block_trade": null},
+                "target_inputs": {"peer_median_PE": 18.0, "trailing_EPS": 40.0, "latest_close": 900.0}},
+      "expect": {"per_module_breakdown.chip.status": "ok",
+                 "per_module_breakdown.chip.subfields_complete": false,
+                 "per_module_breakdown.chip.subfields_note_nonempty": true,
+                 "chip_signal_null": false,
+                 "data_completeness": 1.00,
+                 "renormalisation_triggered": false,
+                 "weight_effective": {"technical": 0.30, "fundamental": 0.30, "chip": 0.25, "news": 0.15},
+                 "note": "Binds to contract v1.2.6 §9 (A3, cites this fixture): the structured honest-surfacing field is PerModuleBreakdown.subfields_complete (bool, default true) + optional subfields_note. BINDING assertions: chip breakdown status='ok' (NOT unavailable), subfields_complete=false, subfields_note non-empty (e.g. '3-institution nets only; margin/block unavailable'), chip signal non-null in [-2,2], data_completeness=1.00 (module-level, chip counts), renormalisation_triggered=false, weight_effective unchanged. subfields_complete=true elsewhere. The chip signal NUMBER is engine-computed from available sub-fields (A5-owned, not frozen). Point: partial chip = OK-with-structured-visible-partial, NEVER unavailable AND NEVER silently-full. JSONB shape only — no DB DDL. Verify field names against the candidate's OpenAPI/§9 via git show at gate."}
+    },
 
     {"id": "GF-BAND-SS", "desc": "band: below -1.5 -> Strong Sell", "input": {"composite_signal": -1.51}, "expect": {"composite_call": "STRONG_SELL"}},
     {"id": "GF-BAND-SS-edge", "desc": "band: exactly -1.5 -> milder -> Sell", "input": {"composite_signal": -1.50}, "expect": {"composite_call": "SELL"}},
