@@ -35,11 +35,13 @@ class FakeDb:
     async def executemany(self, query, rows):
         self.sql_log.append(query)
         assert "ON CONFLICT (ticker_id, bar_date)" in query  # idempotent
+        assert "ingested_at = now()" in query  # v1.2.5 last-fetched provenance
         self.bar_rows.extend(rows)
 
     async def execute(self, query, *args):
         self.sql_log.append(query)
         assert "ON CONFLICT (ticker_id, asof_date)" in query  # idempotent
+        assert "ingested_at = now()" in query  # v1.2.5 last-fetched provenance
         self.fundamental_rows.append(args)
 
 

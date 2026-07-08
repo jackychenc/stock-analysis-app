@@ -213,23 +213,27 @@ _FUNDAMENTAL_FIELDS = {
     "net_margin": "profitMargins",
 }
 
+# v1.2.5 provenance: ingested_at defaults to now() on INSERT and is explicitly
+# refreshed on UPDATE (last-fetched semantics, per A3's upsert rule).
 _UPSERT_BAR = """
     INSERT INTO price_bar (ticker_id, bar_date, open, high, low, close, volume, source)
     VALUES ($1, $2, $3, $4, $5, $6, $7, 'yfinance')
     ON CONFLICT (ticker_id, bar_date) DO UPDATE SET
         open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low,
-        close = EXCLUDED.close, volume = EXCLUDED.volume, source = EXCLUDED.source
+        close = EXCLUDED.close, volume = EXCLUDED.volume,
+        source = EXCLUDED.source, ingested_at = now()
 """
 
 _UPSERT_FUNDAMENTAL = """
     INSERT INTO fundamental (ticker_id, asof_date, pe, pb, ev_ebitda, revenue,
-                             eps, gross_margin, op_margin, net_margin)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                             eps, gross_margin, op_margin, net_margin, source)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'yfinance')
     ON CONFLICT (ticker_id, asof_date) DO UPDATE SET
         pe = EXCLUDED.pe, pb = EXCLUDED.pb, ev_ebitda = EXCLUDED.ev_ebitda,
         revenue = EXCLUDED.revenue, eps = EXCLUDED.eps,
         gross_margin = EXCLUDED.gross_margin, op_margin = EXCLUDED.op_margin,
-        net_margin = EXCLUDED.net_margin
+        net_margin = EXCLUDED.net_margin,
+        source = EXCLUDED.source, ingested_at = now()
 """
 
 
