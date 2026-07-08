@@ -543,3 +543,106 @@ def test_tpex_dealer_net_includes_foreign_dealer_component():
     row = table["6488"]
     assert row["foreign_net"] == 5600            # dealers-excluded convention
     assert row["dealer_net"] == -1200 + (9100 - 5600)  # foreign dealers folded in
+
+
+# --- Task #18: margin/block aux endpoints ---------------------------------------
+
+def _client_with_mocked_http(responses: dict[str, object]):
+    """RealTwseTpexClient with http_get returning canned payloads by URL match."""
+    import json as _json
+    from unittest.mock import patch
+
+    from app.batch.adapters.twse_tpex_adapter import RealTwseTpexClient
+
+    client = RealTwseTpexClient.__new__(RealTwseTpexClient)
+    client._cache = {}
+    client._aux_cache = {}
+    client._response_date = {}
+    client.aux_notes = []
+    client._asof = date(2026, 7, 7)
+
+    def fake_get(url, **kwargs):
+        for marker, payload in responses.items():
+            if marker in url:
+                if isinstance(payload, Exception):
+                    raise payload
+                return _json.dumps(payload).encode()
+        raise AssertionError(f"unexpected URL {url}")
+
+    return client, patch("app.batch.adapters.twse_tpex_adapter.http_get",
+                         side_effect=fake_get)
+
+
+TPEX_NETS_ROW = {
+    "Date": "1150707", "SecuritiesCompanyCode": "6488",
+    "Dealers-Difference": "-100",
+    "SecuritiesInvestmentTrustCompanies-Difference": "200",
+    "Foreign Investors include Mainland Area Investors "
+    "(Foreign Dealers excluded)-Difference": "300",
+    "ForeignInvestorsInclude MainlandAreaInvestors-Difference": "300",
+}
+
+
+def test_t18_margin_block_merged_when_dates_match():
+    client, http_patch = _client_with_mocked_http({
+        "tpex_3insti": [TPEX_NETS_ROW],
+        "tpex_mgtrade": [{"Date": "1150707", "SecuritiesCompanyCode": "6488",
+                          "MarginTransactionsTodayBalance": "12,345"}],
+        "tpex_block": [{"Date": "1150707", "SecuritiesCompanyCode": "6488",
+                        "TradingVolume": "5,000"}],
+    })
+    with http_patch:
+        rows = client.fetch_daily_chip("6488", "TPEx")
+    assert rows[0]["margin_balance"] == 12345
+    assert rows[0]["block_trade_volume"] == 5000
+    assert rows[0]["trade_date"] == date(2026, 7, 7)
+
+
+def test_t18_date_mismatch_yields_null_never_cross_day_blend():
+    client, http_patch = _client_with_mocked_http({
+        "tpex_3insti": [TPEX_NETS_ROW],
+        "tpex_mgtrade": [{"Date": "1150704", "SecuritiesCompanyCode": "6488",
+                          "MarginTransactionsTodayBalance": "12,345"}],  # older day
+        "tpex_block": [{"Date": "1150707", "SecuritiesCompanyCode": "6488",
+                        "TradingVolume": "5,000"}],
+    })
+    with http_patch:
+        rows = client.fetch_daily_chip("6488", "TPEx")
+    assert rows[0]["margin_balance"] is None      # stale margin NOT blended
+    assert rows[0]["block_trade_volume"] == 5000  # matching block still merges
+
+
+def test_t18_aux_endpoint_failure_never_blocks_nets():
+    client, http_patch = _client_with_mocked_http({
+        "tpex_3insti": [TPEX_NETS_ROW],
+        "tpex_mgtrade": RuntimeError("HTTP 503"),
+        "tpex_block": RuntimeError("HTTP 503"),
+    })
+    with http_patch:
+        rows = client.fetch_daily_chip("6488", "TPEx")
+    assert rows[0]["foreign_net"] == 300          # nets intact
+    assert rows[0]["margin_balance"] is None      # honest NULL
+    assert rows[0]["block_trade_volume"] is None
+    assert len(client.aux_notes) == 2             # gaps NAMED, not hidden
+
+
+def test_t18_twse_margin_table_detection_and_block_print_sum():
+    client, http_patch = _client_with_mocked_http({
+        "T86": {"stat": "OK", "date": "20260707",
+                "fields": ["證券代號", "外陸資買賣超股數(不含外資自營商)",
+                           "投信買賣超股數", "自營商買賣超股數"],
+                "data": [["2330", "1,000", "2,000", "3,000"]]},
+        "MI_MARGN": {"stat": "OK", "date": "20260707", "tables": [
+            {"title": "aggregate", "fields": ["項目", "金額"], "data": []},
+            {"title": "per-stock", "fields": ["股票代號", "股票名稱", "融資今日餘額"],
+             "data": [["2330", "台積電", "88,000"]]},
+        ]},
+        "BFIAUU": {"stat": "OK", "date": "20260707", "tables": [
+            {"title": "blocks", "fields": ["證券代號", "成交股數"],
+             "data": [["2330", "1,500"], ["2330", "500"]]},  # two prints -> sum
+        ]},
+    })
+    with http_patch:
+        rows = client.fetch_daily_chip("2330", "TWSE")
+    assert rows[0]["margin_balance"] == 88000
+    assert rows[0]["block_trade_volume"] == 2000  # 1500 + 500 summed

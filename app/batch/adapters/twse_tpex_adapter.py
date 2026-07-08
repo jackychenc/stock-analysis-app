@@ -58,6 +58,15 @@ _TWSE_T86_URL = ("https://www.twse.com.tw/rwd/zh/fund/T86"
                  "?date={yyyymmdd}&selectType=ALLBUT0999&response=json")
 _TPEX_3INSTI_URL = "https://www.tpex.org.tw/openapi/v1/tpex_3insti_daily_trading"
 
+# Task #18 delta: margin (融資融券) + block-trade endpoints. Field/table names
+# use the settled candidate/normalized parse; A7 pre-flight confirms live.
+_TWSE_MARGIN_URL = ("https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN"
+                    "?date={yyyymmdd}&selectType=ALL&response=json")
+_TWSE_BLOCK_URL = ("https://www.twse.com.tw/rwd/zh/block/BFIAUU"
+                   "?date={yyyymmdd}&response=json")
+_TPEX_MARGIN_URL = "https://www.tpex.org.tw/openapi/v1/tpex_mgtrade_daily_trading"
+_TPEX_BLOCK_URL = "https://www.tpex.org.tw/openapi/v1/tpex_block_day_trading"
+
 # A8 #4: bounds beyond NaN — poisoned upstream values must not land in the DB.
 _MAX_CHIP_MAGNITUDE = 10_000_000_000_000  # 1e13 shares/lots is not a real market
 
@@ -128,7 +137,9 @@ class RealTwseTpexClient:
     def __init__(self, asof: date | None = None):
         self._asof = _latest_weekday(asof or date.today())
         self._cache: dict[str, dict[str, dict[str, Any]]] = {}
+        self._aux_cache: dict[str, dict[str, tuple[int | None, date | None]]] = {}
         self._response_date: dict[str, date | None] = {}
+        self.aux_notes: list[str] = []  # surfaced by ingest into stats
 
     def fetch_daily_chip(self, symbol: str, exchange: str) -> list[dict[str, Any]]:
         table = self._market_table(exchange)
@@ -140,12 +151,125 @@ class RealTwseTpexClient:
         row_date = nets.pop("trade_date", None) or self._response_date.get(exchange)
         if row_date is None:
             raise ValueError(f"{exchange} response carried no parseable trade date")
+        # Task #18: margin/block merged BEST-EFFORT — an auxiliary endpoint
+        # failure never blocks the nets, and a value only merges when its
+        # response date matches the nets' trade_date (no cross-day blending).
         return [{
             "trade_date": row_date,
             **nets,
-            "margin_balance": None,      # separate endpoint — known limitation
-            "block_trade_volume": None,  # separate endpoint — known limitation
+            "margin_balance": self._aux_value("margin", exchange, symbol, row_date),
+            "block_trade_volume": self._aux_value("block", exchange, symbol, row_date),
         }]
+
+    def _aux_value(self, kind: str, exchange: str, symbol: str,
+                   row_date: date) -> int | None:
+        table = self._aux_table(kind, exchange)
+        entry = table.get(symbol)
+        if entry is None:
+            return None
+        value, aux_date = entry
+        if aux_date is not None and aux_date != row_date:
+            return None  # date mismatch: honest NULL, never a cross-day blend
+        return value
+
+    def _aux_table(
+        self, kind: str, exchange: str
+    ) -> dict[str, tuple[int | None, date | None]]:
+        key = f"{kind}:{exchange}"
+        if key not in self._aux_cache:
+            try:
+                if exchange == "TWSE":
+                    fetch = (self._fetch_twse_margin if kind == "margin"
+                             else self._fetch_twse_block)
+                else:
+                    fetch = (self._fetch_tpex_margin if kind == "margin"
+                             else self._fetch_tpex_block)
+                self._aux_cache[key] = fetch()
+            except Exception as exc:
+                # Best-effort: aux failure -> empty table (honest NULLs) + note
+                # surfaced into ingest stats (visible completeness, T18).
+                logger.warning("%s %s table unavailable: %s", exchange, kind, exc)
+                self.aux_notes.append(f"{exchange} {kind}: {exc}")
+                self._aux_cache[key] = {}
+        return self._aux_cache[key]
+
+    def _fetch_twse_margin(self) -> dict[str, tuple[int | None, date | None]]:
+        url = _TWSE_MARGIN_URL.format(yyyymmdd=self._asof.strftime("%Y%m%d"))
+        payload = json.loads(http_get(url, allowed_hosts=ALLOWED_HOSTS,
+                                      max_bytes=MAX_RESPONSE_BYTES))
+        table_date = _roc_to_gregorian(payload.get("date", ""))
+        # MI_MARGN wraps per-stock rows in "tables"; find the one whose fields
+        # carry a stock-code column and a today-balance (今日餘額) column.
+        for tbl in payload.get("tables") or [payload]:
+            fields = tbl.get("fields") or []
+            try:
+                i_code = next(i for i, f in enumerate(fields) if "代號" in f)
+                i_bal = next(i for i, f in enumerate(fields) if "今日餘額" in f)
+            except StopIteration:
+                continue
+            return {str(r[i_code]).strip(): (_parse_tw_int(r[i_bal]), table_date)
+                    for r in tbl.get("data") or []}
+        raise ValueError("MI_MARGN response carried no per-stock margin table")
+
+    def _fetch_twse_block(self) -> dict[str, tuple[int | None, date | None]]:
+        url = _TWSE_BLOCK_URL.format(yyyymmdd=self._asof.strftime("%Y%m%d"))
+        payload = json.loads(http_get(url, allowed_hosts=ALLOWED_HOSTS,
+                                      max_bytes=MAX_RESPONSE_BYTES))
+        table_date = _roc_to_gregorian(payload.get("date", ""))
+        for tbl in payload.get("tables") or [payload]:
+            fields = tbl.get("fields") or []
+            try:
+                i_code = next(i for i, f in enumerate(fields) if "代號" in f)
+                i_vol = next(i for i, f in enumerate(fields)
+                             if "成交股數" in f or "成交量" in f)
+            except StopIteration:
+                continue
+            table: dict[str, tuple[int | None, date | None]] = {}
+            for r in tbl.get("data") or []:
+                code = str(r[i_code]).strip()
+                vol = _parse_tw_int(r[i_vol])
+                prev = table.get(code)
+                if prev and prev[0] is not None and vol is not None:
+                    vol += prev[0]  # multiple block prints per code: sum
+                table[code] = (vol, table_date)
+            return table
+        raise ValueError("BFIAUU response carried no per-stock block table")
+
+    def _fetch_tpex_margin(self) -> dict[str, tuple[int | None, date | None]]:
+        payload = json.loads(http_get(_TPEX_MARGIN_URL, allowed_hosts=ALLOWED_HOSTS,
+                                      max_bytes=MAX_RESPONSE_BYTES))
+        table: dict[str, tuple[int | None, date | None]] = {}
+        for row in payload:
+            norm = {_normalize_key(k): v for k, v in row.items()}
+            code = norm.get(self._TPEX_CODE_KEY)
+            if code is None:
+                continue
+            bal = next((norm[k] for k in self._TPEX_MARGIN_BAL_KEYS if k in norm),
+                       None)
+            table[str(code).strip()] = (
+                _parse_tw_int(bal),
+                _roc_to_gregorian(norm.get(self._TPEX_DATE_KEY, "")),
+            )
+        return table
+
+    def _fetch_tpex_block(self) -> dict[str, tuple[int | None, date | None]]:
+        payload = json.loads(http_get(_TPEX_BLOCK_URL, allowed_hosts=ALLOWED_HOSTS,
+                                      max_bytes=MAX_RESPONSE_BYTES))
+        table: dict[str, tuple[int | None, date | None]] = {}
+        for row in payload:
+            norm = {_normalize_key(k): v for k, v in row.items()}
+            code = norm.get(self._TPEX_CODE_KEY)
+            if code is None:
+                continue
+            vol_i = _parse_tw_int(next(
+                (norm[k] for k in self._TPEX_BLOCK_VOL_KEYS if k in norm), None))
+            d = _roc_to_gregorian(norm.get(self._TPEX_DATE_KEY, ""))
+            code_s = str(code).strip()
+            prev = table.get(code_s)
+            if prev and prev[0] is not None and vol_i is not None:
+                vol_i += prev[0]  # sum multiple prints per code
+            table[code_s] = (vol_i, d)
+        return table
 
     def _market_table(self, exchange: str) -> dict[str, dict[str, int | None]]:
         if exchange not in self._cache:
@@ -207,6 +331,14 @@ class RealTwseTpexClient:
     _TPEX_DEALER_KEY = "dealers-difference"
     _TPEX_CODE_KEY = "securitiescompanycode"
     _TPEX_DATE_KEY = "date"
+    # Task #18 candidate keys (normalized) — A7 pre-flight settles the live set.
+    _TPEX_MARGIN_BAL_KEYS = (
+        "margintransactionstodaybalance", "margintodaybalance",
+        "marginpurchasetodaybalance", "todaybalance",
+    )
+    _TPEX_BLOCK_VOL_KEYS = (
+        "tradingvolume", "tradevolume", "volume", "transactionvolume",
+    )
 
     def _fetch_tpex(self) -> dict[str, dict[str, Any]]:
         payload = json.loads(http_get(_TPEX_3INSTI_URL, allowed_hosts=ALLOWED_HOSTS,
@@ -263,10 +395,15 @@ class ChipIngestStats:
     rows_upserted: int = 0
     rows_skipped: int = 0        # invalid per-field values — counted, not hidden
     failures: list[str] = field(default_factory=list)
+    aux_notes: list[str] = field(default_factory=list)  # margin/block gaps (T18)
 
     def summary(self) -> str:
         msg = (f"tickers ok={self.tickers_ok} failed={self.tickers_failed}; "
                f"rows upserted={self.rows_upserted} skipped={self.rows_skipped}")
+        if self.aux_notes:
+            # Visible completeness (T18): #10 must never read partial chip
+            # data as full — margin/block gaps are named, not hidden.
+            msg += f"; aux gaps: {'; '.join(self.aux_notes)}"
         if self.failures:
             msg += f"; failures: {'; '.join(self.failures)}"
         return msg
@@ -339,6 +476,8 @@ async def ingest_twse_tpex(
 
     if stats.tickers_ok == 0:
         raise AdapterUnavailable(f"all tickers failed: {'; '.join(stats.failures)}")
+    # T18: surface best-effort margin/block endpoint gaps into the run message.
+    stats.aux_notes.extend(getattr(client, "aux_notes", []))
     return stats
 
 
