@@ -7,6 +7,21 @@ never touch this source). Scope guardrails:
 - per-ticker isolation: one ticker's failure never aborts the others (§22.4);
 - idempotent upserts on (ticker_id, trade_date); provenance source +
   ingested_at refreshed on update (v1.2.5);
+
+METHODOLOGY NOTE (A3 no-double-count invariant, 2026-07-08) — source-column
+-> schema-column mapping; the three nets partition the institutions with each
+counted exactly once:
+- foreign_net        = Foreign & Mainland investors, foreign-dealers-EXCLUDED
+                       (TWSE 外陸資買賣超股數(不含外資自營商); TPEx
+                       "...(Foreign Dealers excluded)-Difference").
+- dealer_net         = dealers INCLUDING foreign dealers (TWSE 自營商買賣超
+                       + 外資自營商買賣超; TPEx Dealers-Difference + the
+                       foreign-dealer component (incl − excl)). If the
+                       foreign-dealer column is absent upstream, dealer_net
+                       falls back to the dealers total and the component is
+                       dropped — visible here, never silently blended.
+- investment_trust_net = investment trust -Difference (投信買賣超股數).
+Task #10's chip signal must interpret the nets under this convention.
 - field validity is PER-FIELD (T9-M2): the three *_net columns are SIGNED —
   net-sell is real and stored honestly; margin_balance/block_trade_volume can
   never be negative; NaN/inf/absurd magnitudes are rejected AND counted.
@@ -154,16 +169,30 @@ class RealTwseTpexClient:
                     return i
             raise ValueError(f"TWSE T86 missing expected column {names[0]}")
 
+        def col_opt(*names: str) -> int | None:
+            for i, f in enumerate(fields):
+                if f in names:
+                    return i
+            return None
+
         i_code = col("證券代號")
         i_foreign = col("外陸資買賣超股數(不含外資自營商)", "外資買賣超股數")
         i_trust = col("投信買賣超股數")
         i_dealer = col("自營商買賣超股數")
-        table: dict[str, dict[str, int | None]] = {}
+        # A3 no-double-count invariant: foreign_net EXCLUDES foreign dealers,
+        # so dealer_net must INCLUDE them (外資自營商 counted exactly once).
+        i_fdealer = col_opt("外資自營商買賣超股數")
+        table: dict[str, dict[str, Any]] = {}
         for row in payload.get("data") or []:
+            dealer = _parse_tw_int(row[i_dealer])
+            if i_fdealer is not None:
+                fdealer = _parse_tw_int(row[i_fdealer])
+                if dealer is not None and fdealer is not None:
+                    dealer += fdealer
             table[str(row[i_code]).strip()] = {
                 "foreign_net": _parse_tw_int(row[i_foreign]),
                 "investment_trust_net": _parse_tw_int(row[i_trust]),
-                "dealer_net": _parse_tw_int(row[i_dealer]),
+                "dealer_net": dealer,
             }
         return table
 
@@ -189,13 +218,20 @@ class RealTwseTpexClient:
             code = norm.get(self._TPEX_CODE_KEY)
             if code is None:
                 continue
-            foreign = next(
-                (norm[k] for k in self._TPEX_FOREIGN_KEYS if k in norm), None)
+            foreign_excl = _parse_tw_int(norm.get(self._TPEX_FOREIGN_KEYS[0]))
+            foreign_incl = _parse_tw_int(norm.get(self._TPEX_FOREIGN_KEYS[1]))
+            foreign = foreign_excl if foreign_excl is not None else foreign_incl
+            dealer = _parse_tw_int(norm.get(self._TPEX_DEALER_KEY))
+            # A3 invariant: fold the foreign-dealer component (incl − excl)
+            # into dealer_net so 外資自營商 is counted exactly once.
+            if (dealer is not None and foreign_excl is not None
+                    and foreign_incl is not None):
+                dealer += foreign_incl - foreign_excl
             table[str(code).strip()] = {
                 "trade_date": _roc_to_gregorian(norm.get(self._TPEX_DATE_KEY, "")),
-                "foreign_net": _parse_tw_int(foreign),
+                "foreign_net": foreign,
                 "investment_trust_net": _parse_tw_int(norm.get(self._TPEX_TRUST_KEY)),
-                "dealer_net": _parse_tw_int(norm.get(self._TPEX_DEALER_KEY)),
+                "dealer_net": dealer,
             }
         return table
 

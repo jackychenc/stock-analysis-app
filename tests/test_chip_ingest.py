@@ -509,6 +509,37 @@ def test_tpex_normalized_key_matching_against_live_schema():
         table = client._fetch_tpex()
     row = table["6488"]
     assert row["trade_date"] == date(2026, 7, 7)      # ROC converted, not ISO
-    assert row["dealer_net"] == -1200                  # signed, right key
+    # dealer_net folds in the foreign-dealer component (A3 invariant):
+    # -1200 + (9100 incl − 5600 excl) = 2300 — signed, right keys.
+    assert row["dealer_net"] == 2300
     assert row["investment_trust_net"] == 3400
     assert row["foreign_net"] == 5600                  # dealers-EXCLUDED convention
+
+
+def test_tpex_dealer_net_includes_foreign_dealer_component():
+    """T9-S-MAP (A3 invariant): foreign dealers counted exactly once, in
+    dealer_net — dealer += (foreign_incl − foreign_excl); foreign_net stays
+    the dealers-EXCLUDED figure."""
+    from unittest.mock import patch
+
+    from app.batch.adapters.twse_tpex_adapter import RealTwseTpexClient
+
+    live_row = {
+        "Date": "1150707",
+        "SecuritiesCompanyCode": "6488",
+        "Dealers-Difference": "-1200",
+        "SecuritiesInvestmentTrustCompanies-Difference": "3400",
+        "Foreign Investors include Mainland Area Investors "
+        "(Foreign Dealers excluded)-Difference": "5600",
+        "ForeignInvestorsInclude MainlandAreaInvestors-Difference": "9100",
+    }
+    client = RealTwseTpexClient.__new__(RealTwseTpexClient)
+    client._cache = {}
+    client._response_date = {}
+    import json as _json
+    with patch("app.batch.adapters.twse_tpex_adapter.http_get",
+               return_value=_json.dumps([live_row]).encode()):
+        table = client._fetch_tpex()
+    row = table["6488"]
+    assert row["foreign_net"] == 5600            # dealers-excluded convention
+    assert row["dealer_net"] == -1200 + (9100 - 5600)  # foreign dealers folded in
