@@ -1,25 +1,44 @@
 "use client";
 
-/** Dashboard — three golden states + honest empty-state (task #17).
+/** Dashboard — three golden states + honest empty-state (task #17), plus the
+ * on-demand analyze flow (task #20/#22): search-miss → pending (real phases,
+ * no fake %) → ready/partial (existing Dashboard) / failure, and the explicit
+ * stale-chip + Refresh affordance (server-authoritative cooldown).
  * Client reads server booleans/fields only (composite_call / reduced_confidence
  * / conflict_flag); it NEVER computes spread, renormalisation or suppression.
- * Field bindings + rendering rules: A4 web-slice-handoff.md §3. */
+ * Field bindings + rendering rules: A4 web-slice-handoff.md §3 +
+ * task20-on-demand-registration-spec.md (6 states). */
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import {
+  AnalyzeAccepted,
+  AnalyzeFailureReason,
+  AnalyzeJob,
+  AnalyzeJobStatus,
+  AnalyzePhase,
   CALL_LABELS,
   CALL_RENDER,
   Dashboard,
+  FAILURE_COPY,
   fmtSigned,
   MODULE_LABELS,
   ModuleName,
   PerModuleBreakdown,
   signalColorVar,
   signalIcon,
+  SYMBOL_RE,
 } from "@/lib/contract";
 
 const MODULE_ORDER: ModuleName[] = ["technical", "fundamental", "chip", "news"];
+
+/** On-demand analyze flow (spec states 1/2/5; 3/4/6 render via DashboardView).
+ * `force` is remembered so "Try again" re-POSTs the same request. */
+type AnalyzeFlow =
+  | { kind: "idle" }
+  | { kind: "miss"; ticker: string; error: string | null }
+  | { kind: "pending"; ticker: string; runId: string; pollAfterMs: number; force: boolean }
+  | { kind: "failed"; ticker: string; reason: AnalyzeFailureReason | null; force: boolean };
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -28,6 +47,14 @@ export default function DashboardPage() {
   const [data, setData] = useState<Dashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [flow, setFlow] = useState<AnalyzeFlow>({ kind: "idle" });
+  // Current pending step, driven ONLY by server status/phase (no fake progress).
+  const [job, setJob] = useState<{ status: AnalyzeJobStatus; phase: AnalyzePhase | null }>(
+    { status: "queued", phase: null },
+  );
+  const [posting, setPosting] = useState(false);
+  // Symbol-guard error under the search box (client pre-check or server 400).
+  const [inlineError, setInlineError] = useState<string | null>(null);
 
   const load = useCallback(
     async (symbol: string) => {
@@ -45,11 +72,12 @@ export default function DashboardPage() {
         if (r.status === 404) {
           const body = await r.json().catch(() => null);
           setData(null);
-          setError(
-            body?.detail?.code === "SECTOR_NOT_COVERED"
-              ? "This ticker is not covered yet."
-              : "Ticker not found.",
-          );
+          if (body?.detail?.code === "SECTOR_NOT_COVERED") {
+            // State 1 (search-miss): not a dead-end any more — offer Analyze.
+            setFlow({ kind: "miss", ticker: symbol, error: null });
+          } else {
+            setError("Ticker not found.");
+          }
           return;
         }
         if (!r.ok) {
@@ -58,6 +86,7 @@ export default function DashboardPage() {
           return;
         }
         setData((await r.json()) as Dashboard);
+        setFlow({ kind: "idle" });
       } catch {
         setData(null);
         setError("Cannot reach the API — is the local stack running?");
@@ -67,6 +96,118 @@ export default function DashboardPage() {
     },
     [router],
   );
+
+  /** POST /analyze — the single entry into the analyze flow (search-miss CTA,
+   * Refresh {force:true}, and failure "Try again" all land here). */
+  const startAnalyze = useCallback(
+    async (symbol: string, force: boolean) => {
+      const t = symbol.trim().toUpperCase();
+      // Instant client pre-check mirroring server SYMBOL_RE; server 400 stays
+      // authoritative below (fail-closed at ingress — no fetch on a miss).
+      if (!SYMBOL_RE.test(t)) {
+        setInlineError(`'${symbol.trim()}' isn't a valid ticker symbol.`);
+        return;
+      }
+      setPosting(true);
+      setInlineError(null);
+      try {
+        const r = await fetch("/api/v1/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(force ? { ticker: t, force: true } : { ticker: t }),
+          credentials: "include",
+        });
+        if (r.status === 401) {
+          router.push("/");
+          return;
+        }
+        if (r.status === 202) {
+          // State 2 (pending): poll every poll_after_ms until terminal.
+          const body = (await r.json()) as AnalyzeAccepted;
+          setJob({ status: "queued", phase: null });
+          setFlow({
+            kind: "pending",
+            ticker: t,
+            runId: body.run_id,
+            pollAfterMs: body.poll_after_ms,
+            force,
+          });
+          return;
+        }
+        if (r.ok) {
+          // 200 fresh/cooldown short-circuit — the snapshot answers; show it.
+          setFlow({ kind: "idle" });
+          await load(t);
+          return;
+        }
+        const body = await r.json().catch(() => null);
+        const message: string =
+          body?.detail?.message ?? `Service unavailable (${r.status}).`;
+        if (r.status === 400) {
+          setInlineError(message); // server symbol guard is authoritative
+          return;
+        }
+        if (r.status === 409) {
+          // FR-61 coverage-pool cap: server's actionable message, verbatim.
+          setFlow({ kind: "miss", ticker: t, error: message });
+          return;
+        }
+        setFlow({ kind: "failed", ticker: t, reason: null, force });
+      } catch {
+        setFlow({ kind: "failed", ticker: t, reason: null, force });
+      } finally {
+        setPosting(false);
+      }
+    },
+    [router, load],
+  );
+
+  // State 2 polling loop: GET /analyze/{run_id} every poll_after_ms.
+  // Terminal ready|partial → re-fetch the dashboard (states 3/4 reuse it);
+  // failed → state 5. The step list is driven only by status/phase.
+  useEffect(() => {
+    if (flow.kind !== "pending") return;
+    const { ticker: t, runId, pollAfterMs, force } = flow;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      try {
+        const r = await fetch(`/api/v1/analyze/${encodeURIComponent(runId)}`, {
+          credentials: "include",
+        });
+        if (cancelled) return;
+        if (r.status === 401) {
+          router.push("/");
+          return;
+        }
+        if (!r.ok) {
+          // 404 unknown run_id or transient server error — honest failure.
+          setFlow({ kind: "failed", ticker: t, reason: null, force });
+          return;
+        }
+        const j = (await r.json()) as AnalyzeJob;
+        if (cancelled) return;
+        if (j.status === "ready" || j.status === "partial") {
+          setFlow({ kind: "idle" });
+          void load(t);
+          return;
+        }
+        if (j.status === "failed") {
+          setFlow({ kind: "failed", ticker: t, reason: j.reason ?? null, force });
+          return;
+        }
+        setJob({ status: j.status, phase: j.phase ?? null });
+      } catch {
+        if (cancelled) return; // network blip — keep polling
+      }
+      timer = setTimeout(poll, pollAfterMs);
+    }
+    timer = setTimeout(poll, pollAfterMs);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [flow, router, load]);
 
   // Review/deep-link support: /dashboard?ticker=GF-B drives the state directly.
   useEffect(() => {
@@ -90,7 +231,16 @@ export default function DashboardPage() {
           className="flex items-center gap-2"
           onSubmit={(e) => {
             e.preventDefault();
-            setQuery(ticker.trim().toUpperCase());
+            const t = ticker.trim().toUpperCase();
+            // Invalid-symbol guard: instant inline error, no fetch
+            // (fail-closed at ingress; server 400 remains authoritative).
+            if (!SYMBOL_RE.test(t)) {
+              setInlineError(`'${ticker.trim()}' isn't a valid ticker symbol.`);
+              return;
+            }
+            setInlineError(null);
+            setFlow({ kind: "idle" });
+            setQuery(t);
           }}
         >
           <input
@@ -104,6 +254,7 @@ export default function DashboardPage() {
           <button
             type="submit"
             disabled={busy}
+            aria-disabled={busy}
             className="min-h-11 rounded-xl px-4 text-sm font-semibold text-white disabled:opacity-60"
             style={{ background: "var(--accent)" }}
           >
@@ -112,19 +263,65 @@ export default function DashboardPage() {
         </form>
       </header>
 
-      {error && (
+      {inlineError && (
+        <p
+          role="alert"
+          data-testid="symbol-error"
+          className="rounded-lg px-3 py-2 text-sm"
+          style={{ background: "var(--red-bg)", color: "var(--red)" }}
+        >
+          {inlineError}
+        </p>
+      )}
+
+      {flow.kind === "miss" && (
+        <SearchMissCard
+          ticker={flow.ticker}
+          error={flow.error}
+          busy={posting}
+          onAnalyze={() => void startAnalyze(flow.ticker, false)}
+        />
+      )}
+      {flow.kind === "pending" && (
+        <PendingCard ticker={flow.ticker} status={job.status} phase={job.phase} />
+      )}
+      {flow.kind === "failed" && (
+        <FailureCard
+          ticker={flow.ticker}
+          reason={flow.reason}
+          busy={posting}
+          onRetry={() => void startAnalyze(flow.ticker, flow.force)}
+        />
+      )}
+
+      {flow.kind === "idle" && error && (
         <div className="card p-6 text-sm" style={{ color: "var(--sub)" }}>
           {error}
         </div>
       )}
 
-      {data && <DashboardView data={data} />}
+      {flow.kind === "idle" && data && (
+        <DashboardView
+          data={data}
+          refreshing={posting}
+          onRefresh={() => void startAnalyze(data.ticker, true)}
+        />
+      )}
     </div>
   );
 }
 
-function DashboardView({ data }: { data: Dashboard }) {
+function DashboardView({
+  data, refreshing, onRefresh,
+}: {
+  data: Dashboard; refreshing: boolean; onRefresh: () => void;
+}) {
   const rec = data.recommendation;
+  // State 6: stale is derivable read-time — snapshot as_of < today (UTC,
+  // matching the server's clock). Explicit chip + user-initiated Refresh only.
+  const stale =
+    data.rec_date !== null &&
+    data.rec_date < new Date().toISOString().slice(0, 10);
 
   // Honest empty-state: pre-engine, no snapshot yet (distinct from SUPPRESSED).
   if (data.rec_date === null || rec === null) {
@@ -173,7 +370,27 @@ function DashboardView({ data }: { data: Dashboard }) {
               {rec.methodology_version}
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            {data.rec_date && (
+              <span
+                data-testid="chip-asof"
+                className="rounded-lg px-2.5 py-1 text-xs font-semibold num"
+                style={
+                  stale
+                    ? { background: "var(--amber-bg)", color: "var(--amber)" }
+                    : { background: "var(--line-2)", color: "var(--sub)" }
+                }
+              >
+                as of {data.rec_date}
+              </span>
+            )}
+            {stale && (
+              <RefreshControl
+                nextRefreshAt={data.next_refresh_at}
+                busy={refreshing}
+                onRefresh={onRefresh}
+              />
+            )}
             {rec.conflict_flag && (
               <span
                 data-testid="chip-conflict"
@@ -381,4 +598,170 @@ function confidenceBadgeStyle(level: "HIGH" | "MEDIUM" | "LOW"): React.CSSProper
   if (level === "HIGH") return { background: "var(--conf-hi-bg)", color: "var(--conf-hi-ink)" };
   if (level === "MEDIUM") return { background: "var(--amber-bg)", color: "var(--amber)" };
   return { background: "var(--line-2)", color: "var(--sub)" };
+}
+
+/* ---- On-demand analyze states (task #20 spec states 1/2/5/6) ------------- */
+
+/** State 1 — search-miss: not-covered is an invitation, not a dead-end.
+ * The 409 pool-cap message (server, verbatim) also lands here. */
+function SearchMissCard({
+  ticker, error, busy, onAnalyze,
+}: {
+  ticker: string; error: string | null; busy: boolean; onAnalyze: () => void;
+}) {
+  return (
+    <section className="card flex flex-col items-center gap-2 p-10 text-center"
+      data-testid="search-miss">
+      <span className="text-2xl font-extrabold num">{ticker}</span>
+      <p className="text-sm font-semibold">{ticker} isn&apos;t analyzed yet.</p>
+      <p className="text-sm" style={{ color: "var(--sub)" }}>
+        First analysis takes ~1–2 min, then it updates daily.
+      </p>
+      <button
+        type="button"
+        onClick={onAnalyze}
+        disabled={busy}
+        aria-disabled={busy}
+        className="mt-2 min-h-11 rounded-xl px-5 text-sm font-semibold text-white disabled:opacity-60"
+        style={{ background: "var(--accent)" }}
+        data-testid="btn-analyze"
+      >
+        {busy ? "Starting…" : `Analyze ${ticker}`}
+      </button>
+      {error && (
+        <p role="alert" className="mt-2 rounded-lg px-3 py-2 text-sm"
+          style={{ background: "var(--red-bg)", color: "var(--red)" }}>
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** State 2 — pending. Step list driven ONLY by server status/phase:
+ * queued → 1 · running+fetching → 2 · running+scoring → 3. No fake % bar. */
+const PENDING_STEPS: { label: string; detail: string }[] = [
+  { label: "Queued", detail: "Queued…" },
+  { label: "Fetching data", detail: "Fetching price, fundamentals, chip & news…" },
+  { label: "Scoring", detail: "Scoring the five lenses…" },
+];
+
+function PendingCard({
+  ticker, status, phase,
+}: {
+  ticker: string; status: AnalyzeJobStatus; phase: AnalyzePhase | null;
+}) {
+  const active = status === "queued" ? 0 : phase === "scoring" ? 2 : 1;
+  return (
+    <section className="card flex flex-col items-center gap-4 p-10 text-center"
+      data-testid="analyze-pending">
+      <span
+        aria-hidden
+        className="h-8 w-8 animate-spin rounded-full border-2"
+        style={{ borderColor: "var(--accent)", borderTopColor: "transparent" }}
+      />
+      <div>
+        <p className="text-base font-semibold">Analyzing {ticker}…</p>
+        <p className="mt-1 text-sm" style={{ color: "var(--sub)" }}>
+          Usually takes ~1–2 min.
+        </p>
+      </div>
+      <ol aria-live="polite" className="flex flex-col items-start gap-1.5 text-sm">
+        {PENDING_STEPS.map((s, i) => (
+          <li
+            key={s.label}
+            className={i === active ? "font-semibold" : ""}
+            style={{ color: i === active ? "var(--ink)" : "var(--sub)" }}
+          >
+            <span aria-hidden>{i < active ? "✓ " : i === active ? "▸ " : "○ "}</span>
+            {i === active ? s.detail : s.label}
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+/** State 5 — failure: honest, one sanitized line per FR-62 category; never a
+ * fabricated result, never raw internals. */
+function FailureCard({
+  ticker, reason, busy, onRetry,
+}: {
+  ticker: string;
+  reason: AnalyzeFailureReason | null;
+  busy: boolean;
+  onRetry: () => void;
+}) {
+  return (
+    <section className="card flex flex-col items-center gap-2 p-10 text-center"
+      data-testid="analyze-failed">
+      <p className="text-base font-semibold" style={{ color: "var(--red)" }}>
+        Couldn&apos;t analyze {ticker} right now.
+      </p>
+      <p role="alert" className="text-sm" style={{ color: "var(--sub)" }}>
+        {reason ? FAILURE_COPY[reason] : "Something went wrong — try again."}
+      </p>
+      <button
+        type="button"
+        onClick={onRetry}
+        disabled={busy}
+        aria-disabled={busy}
+        className="mt-2 min-h-11 rounded-xl px-5 text-sm font-semibold text-white disabled:opacity-60"
+        style={{ background: "var(--accent)" }}
+        data-testid="btn-retry"
+      >
+        {busy ? "Starting…" : "Try again"}
+      </button>
+    </section>
+  );
+}
+
+/** State 6 — Refresh. Server-authoritative cooldown: while next_refresh_at is
+ * in the future the button is disabled with a live ~30s-refreshed countdown —
+ * never a silent no-op click. Refresh = POST /analyze {force:true} → state 2. */
+function RefreshControl({
+  nextRefreshAt, busy, onRefresh,
+}: {
+  nextRefreshAt: string | null; busy: boolean; onRefresh: () => void;
+}) {
+  const remainingMs = useCooldownRemaining(nextRefreshAt);
+  const cooling = remainingMs > 0;
+  const disabled = busy || cooling;
+  return (
+    <span className="flex items-center gap-2">
+      <button
+        type="button"
+        title="Re-run analysis"
+        onClick={onRefresh}
+        disabled={disabled}
+        aria-disabled={disabled}
+        className="min-h-11 rounded-xl px-4 text-xs font-semibold text-white disabled:opacity-60"
+        style={{ background: "var(--accent)" }}
+        data-testid="btn-refresh"
+      >
+        {busy ? "Starting…" : "Refresh analysis"}
+      </button>
+      {cooling && (
+        <span className="text-xs num" style={{ color: "var(--sub)" }}
+          data-testid="refresh-cooldown">
+          Updated just now · next refresh in ~{Math.max(1, Math.ceil(remainingMs / 60_000))}m
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** Remaining cooldown vs the client clock, re-evaluated every ~30s so the
+ * button enables itself once next_refresh_at passes. */
+function useCooldownRemaining(nextRefreshAt: string | null): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!nextRefreshAt) return;
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, [nextRefreshAt]);
+  if (!nextRefreshAt) return 0;
+  const t = Date.parse(nextRefreshAt);
+  return Number.isNaN(t) ? 0 : Math.max(0, t - now);
 }

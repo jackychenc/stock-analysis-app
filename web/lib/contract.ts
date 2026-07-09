@@ -47,9 +47,47 @@ export interface Dashboard {
   recommendation: Recommendation | null;
   modules: Record<ModuleName, ModuleSummary>;
   supply_chain_available: boolean;
+  /** ADR-009 (task #20): server-authoritative Refresh availability — ISO
+   * timestamp while inside the on-demand cooldown, null once available. */
+  next_refresh_at: string | null;
   disclaimer: string;
   disclaimer_version: string;
 }
+
+/* ---- On-demand analysis (task #20/#22, ADR-009 job polling) ------------- */
+
+export type AnalyzePhase = "fetching" | "scoring";
+export type AnalyzeJobStatus = "queued" | "running" | "ready" | "partial" | "failed";
+export type AnalyzeFailureReason = "source_unavailable" | "fetch_failed" | "timeout";
+
+/** GET /analyze/{run_id} — phase only while running; reason only when failed
+ * (always a sanitized category, never internals). */
+export interface AnalyzeJob {
+  run_id: string;
+  ticker: string;
+  status: AnalyzeJobStatus;
+  phase?: AnalyzePhase;
+  reason?: AnalyzeFailureReason;
+}
+
+/** POST /analyze → 202 body. */
+export interface AnalyzeAccepted {
+  run_id: string;
+  status: "queued";
+  poll_after_ms: number;
+}
+
+/** Mirrors the server SYMBOL_RE ingress guard for instant client feedback —
+ * the server 400 remains authoritative (its message is rendered verbatim). */
+export const SYMBOL_RE = /^[A-Za-z0-9.\-]{1,12}$/;
+
+/** FR-62: one user-facing line per sanitized failure category (A4 spec state 5)
+ * — never raw internals, PII or stacktraces. */
+export const FAILURE_COPY: Record<AnalyzeFailureReason, string> = {
+  source_unavailable: "A data source is temporarily unavailable.",
+  fetch_failed: "We couldn't retrieve data for this ticker.",
+  timeout: "Analysis took too long — try again.",
+};
 
 export const MODULE_LABELS: Record<ModuleName, string> = {
   technical: "Technical",
