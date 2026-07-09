@@ -71,6 +71,13 @@ def _run_full_case(inp: dict):
         kwargs["subfields_complete"] = {"chip": False}
         kwargs["notes"] = {
             "chip": "3-institution nets only; margin/block unavailable"}
+    # GF-CHIP-FLOW-* (task #21, v1.2.10 §4a): a single comparable period means
+    # chip flow direction is uncomputable -> the calculator returns
+    # unavailable with the ruled positioning label (chip∉available already
+    # encodes the None signal; the label rides the notes channel).
+    if inp.get("chip_comparable_periods") == 1:
+        kwargs.setdefault("notes", {})["chip"] = (
+            "13F baseline captured — direction available next quarter")
     # GF-NEWS-* (v1.2.8 §4a): the fixture's adapter-state keys map onto the
     # exact engine inputs the pipeline produces. Outage/ticker-error cases
     # already arrive as news∉available (signal None); the clean-empty case
@@ -113,6 +120,14 @@ def _assert_full_case(case: dict) -> None:
                     key, item.get("subfields_note"))
             else:
                 assert item.get(field) == expected, (key, item.get(field))
+        elif key == "chip_positioning_label_present":
+            # GF-CHIP-FLOW-UNCOMPUTABLE-UNAVAIL: the ruled label must ride
+            # the breakdown note channel (same surfacing as headline_count).
+            chip = next(b for b in result.per_module_breakdown
+                        if b["module"] == "chip")
+            assert (chip.get("subfields_note")
+                    == "13F baseline captured — direction available next quarter"
+                    ) == expected, (key, chip.get("subfields_note"))
         elif key == "chip_signal_null":
             chip = next(b for b in result.per_module_breakdown
                         if b["module"] == "chip")

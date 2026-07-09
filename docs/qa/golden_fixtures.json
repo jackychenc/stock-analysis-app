@@ -130,6 +130,36 @@
                  "reduced_confidence": true,
                  "note": "source-ok + ticker-error -> UNAVAILABLE (state 1), NOT neutral. The discriminator vs GF-NEWS-empty-neutral is source-ok+genuinely-0-headlines (ok/0.0) versus source-ok+ticker-query-error (unavailable). Adapter status model must distinguish fetch-failure / empty-result / ticker-error from day one."}
     },
+    {
+      "id": "GF-CHIP-FLOW-UNCOMPUTABLE-UNAVAIL",
+      "desc": "Task #21 / contract v1.2.10 §4a: the chip lens is a directional institutional-FLOW signal (US: QoQ 13F Δ; TW: net buy/sell over window). When <2 comparable periods exist, flow DIRECTION is uncomputable -> chip status=unavailable -> renormalise + reduced_confidence. It must NEVER default to a hardcoded ok/0.0 (that is the silent-degradation BLOCK class A1/A3 ruled against). This is the live AAPL case (exactly 1 13F quarter). Dedicated-binding case (needs chip period-count provenance, like GF-CHIP-PARTIAL) — binds at chip_score_us([single quarter]) AND the engine renormalisation consequence.",
+      "input": {"signals": {"technical": 1.2, "fundamental": 0.8, "news": 0.0},
+                "available": ["technical","fundamental","news"],
+                "chip_comparable_periods": 1,
+                "note_input": "chip has 1 comparable period (single 13F quarter) -> flow direction uncomputable"},
+      "expect": {"per_module_breakdown.chip.status": "unavailable",
+                 "per_module_breakdown.chip.signal_score": null,
+                 "renormalisation_triggered": true,
+                 "reduced_confidence": true,
+                 "data_completeness": 0.75,
+                 "chip_positioning_label_present": true,
+                 "note": "BINDING: chip_score_us with a single quarter -> status=unavailable, signal null (NOT ok/0.0). Engine consequence: renormalise over technical/fundamental/news (3 survivors, chip weight 0.25 removed), data_completeness=0.75, reduced_confidence=true; positioning_label present ('13F baseline captured — direction available next quarter'). weight_effective renormalised: tech 0.30/0.75, fund 0.30/0.75, news 0.15/0.75. This is the AAPL fix — verify AAPL flips ok/0.0 -> unavailable on the #21 SHA. NOT SUPPRESSED (only 1 module down)."}
+    },
+    {
+      "id": "GF-CHIP-FLOW-NEUTRAL-OK",
+      "desc": "Task #21 / v1.2.10 §4a — the legit counterpart: >=2 comparable periods present and the computed flow genuinely nets to ~0 -> chip status=ok, signal 0.00 (a REAL computed neutral, a real function of the data). NO renormalisation, full completeness. The discriminator vs GF-CHIP-FLOW-UNCOMPUTABLE-UNAVAIL is period-count>=2 + real-computation (ok/0.00) versus period-count<2 + uncomputable (unavailable). Dedicated-binding case.",
+      "input": {"signals": {"technical": 1.2, "fundamental": 0.8, "chip": 0.0, "news": -0.5},
+                "available": ["technical","fundamental","chip","news"],
+                "chip_comparable_periods": 2,
+                "note_input": "chip has >=2 comparable periods; QoQ flow computes to ~0 (net-flat positioning)"},
+      "expect": {"per_module_breakdown.chip.status": "ok",
+                 "per_module_breakdown.chip.signal_score": 0.0,
+                 "renormalisation_triggered": false,
+                 "reduced_confidence": false,
+                 "data_completeness": 1.00,
+                 "weight_effective": {"technical": 0.30, "fundamental": 0.30, "chip": 0.25, "news": 0.15},
+                 "note": "BINDING: chip_score_us with >=2 quarters whose flow nets ~0 -> status=ok, signal 0.00 (real computed neutral), weight_effective unchanged, dc=1.00, NO renormalisation. The chip 0.00 here MUST be a real function of the QoQ delta (delta_pct ~= 0), NOT a hardcoded default. Missing != neutral: this is the ONLY legit chip 0.00 path."}
+    },
 
     {"id": "GF-BAND-SS", "desc": "band: below -1.5 -> Strong Sell", "input": {"composite_signal": -1.51}, "expect": {"composite_call": "STRONG_SELL"}},
     {"id": "GF-BAND-SS-edge", "desc": "band: exactly -1.5 -> milder -> Sell", "input": {"composite_signal": -1.50}, "expect": {"composite_call": "SELL"}},
