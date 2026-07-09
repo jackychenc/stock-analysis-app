@@ -19,8 +19,12 @@ All three nets NULL -> unavailable.
 US rubric: aggregate curated-filer shares for the latest 13F quarter vs the
 prior quarter; score = clamp(delta_pct / US_PCT_PER_POINT, -2, +2) with
 US_PCT_PER_POINT = 5 (a ±10% aggregate positioning swing saturates the
-scale). One quarter only -> neutral 0 with an explicit no-delta note (13F is
-quarterly + delayed, R-04). No rows -> unavailable.
+scale). This is a FLOW (QoQ-delta) methodology, so one quarter only ->
+UNAVAILABLE (task #21 / v1.2.10 §4a ruling: direction is uncomputable from a
+single period — that is insufficient data, not neutrality; the pre-ruling
+"neutral 0 with a note" default was the silent-degradation class). A
+legitimate ok/0.00 still exists when >=2 quarters show ~zero flow. No rows
+-> unavailable. (13F is quarterly + delayed, R-04.)
 """
 
 from decimal import Decimal
@@ -73,8 +77,13 @@ def chip_score_us(quarter_totals: list[tuple[Any, int]]) -> ModuleSignal:
     if not quarter_totals:
         return unavailable("no 13F positioning rows")
     if len(quarter_totals) == 1:
-        return ModuleSignal(signal=Decimal(0), status="ok",
-                            note=f"{US_LABEL}; single quarter — no positioning delta")
+        # Task #21 (v1.2.10 §4a, A1/A3 ruling): the US chip lens is a FLOW
+        # (QoQ-delta) methodology — a single quarter has no comparable
+        # period, so direction is UNCOMPUTABLE. That is insufficient data,
+        # not neutrality: a default 0.0 here would be a fabricated neutral
+        # (the silent-degradation class). Honest cost instead: unavailable
+        # -> renormalise + reduced confidence, self-resolving next quarter.
+        return unavailable("13F baseline captured — direction available next quarter")
     latest, prior = quarter_totals[0][1], quarter_totals[1][1]
     if prior == 0:
         # No prior base: direction only — new positions saturate the scale.

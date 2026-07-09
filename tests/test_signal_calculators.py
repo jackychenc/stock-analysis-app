@@ -229,11 +229,23 @@ def test_chip_us_no_rows_unavailable():
     assert chip_score_us([]).status == "unavailable"
 
 
-def test_chip_us_single_quarter_is_neutral_with_note():
+def test_gf_chip_flow_uncomputable_unavail():
+    """GF-CHIP-FLOW-UNCOMPUTABLE-UNAVAIL (task #21, v1.2.10 §4a): the US chip
+    lens is a FLOW (QoQ-delta) methodology — a single 13F quarter has no
+    comparable period, so direction is uncomputable => UNAVAILABLE (engine
+    renormalises + reduced confidence), NEVER a fabricated ok/0.0."""
     signal = chip_score_us([(Q1, 1_000)])
-    assert signal.signal == Decimal("0")
-    assert US_LABEL in signal.note  # FR-16 quarterly-positioning label
-    assert "no positioning delta" in signal.note
+    assert signal.status == "unavailable" and signal.signal is None
+    assert signal.note == "13F baseline captured — direction available next quarter"
+
+
+def test_gf_chip_flow_neutral_ok():
+    """GF-CHIP-FLOW-NEUTRAL-OK (task #21): >=2 quarters with ~zero flow is a
+    LEGITIMATE computed neutral — ok/0.00 stays honest (delta was measured,
+    it just happens to be zero). Missing != neutral, but measured-zero IS."""
+    signal = chip_score_us([(Q1, 1_000), (Q2, 1_000)])
+    assert signal.status == "ok" and signal.signal == Decimal("0")
+    assert US_LABEL in signal.note
 
 
 def test_chip_us_delta_scaled_and_clamped():
