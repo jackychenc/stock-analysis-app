@@ -1,18 +1,33 @@
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.api.routers import auth, config, health, pipeline, recommendations, stocks
+from app.api.routers import analyze, auth, config, health, pipeline, recommendations, stocks
 from app.core.config import get_settings
 from app.db.pool import close_pool
+from app.db.redis import close_redis
+from app.services.analysis_jobs import worker_loop
 
 API_PREFIX = "/api/v1"  # openapi.yaml servers: /api/v1
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Task #20 (ADR-009): the on-demand analysis worker is an in-process
+    # asyncio task consuming the Redis queue one job at a time (single-user
+    # scale). Tests disable it (ANALYSIS_WORKER_ENABLED=false) so background
+    # consumption never races route-level job-state assertions.
+    worker: asyncio.Task | None = None
+    if get_settings().analysis_worker_enabled:
+        worker = asyncio.create_task(worker_loop(), name="analysis-worker")
     yield
+    if worker is not None:
+        worker.cancel()
+        with suppress(asyncio.CancelledError):
+            await worker
+    await close_redis()
     await close_pool()
 
 
@@ -60,7 +75,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health.router)  # unprefixed: /healthz
     for router in (auth.router, stocks.router, recommendations.router,
-                   config.router, pipeline.router):
+                   config.router, pipeline.router, analyze.router):
         app.include_router(router, prefix=API_PREFIX)
 
     app.state.settings = settings

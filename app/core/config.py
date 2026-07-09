@@ -48,6 +48,19 @@ class Settings(BaseSettings):
     # ticker are config data, editable without a deploy; validated at load (A8).
     news_queries_path: str = "config/news_queries.json"
 
+    # Task #20 (ADR-009 / FR-61/62): on-demand ticker analysis.
+    # - max_coverage_pool_size: FR-61 cap on the COVERED universe (benchmarks
+    #   are is_covered=false and never count);
+    # - on_demand_cooldown_s: a just-analyzed ticker is served from snapshot —
+    #   force bypasses the fresh short-circuit but honors this cooldown;
+    # - analyze_poll_after_ms: the poll hint POST /analyze hands clients.
+    max_coverage_pool_size: int = 25
+    on_demand_cooldown_s: int = 600
+    analyze_poll_after_ms: int = 2000
+    # In-process queue worker (FastAPI lifespan task). Tests disable it so the
+    # background consumer never races route-level job-state assertions.
+    analysis_worker_enabled: bool = True
+
     # FR-39: compliance-owned config (A8) — wording changes are a config
     # change, not a contract change. Canonical text is ASCII-ONLY by A8's
     # final ruling (2026-07-08) so payload == X-Disclaimer header holds

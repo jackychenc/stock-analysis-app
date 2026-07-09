@@ -66,14 +66,15 @@ async def _no_pacing(_delay: float) -> None:
     """Fixture-mode sleeper: nothing to pace — no live egress (FR-19/R-01)."""
 
 
-async def _run_yfinance(conn) -> tuple[str, str]:
+async def _run_yfinance(conn, only_ticker: str | None = None) -> tuple[str, str]:
     """Returns (status, message). Fixture mode (FR-19) is env-switchable so CI
-    and stack smokes never hit Yahoo (R-01 ToS-gray/rate-limited)."""
+    and stack smokes never hit Yahoo (R-01 ToS-gray/rate-limited). only_ticker
+    (task #20) narrows the run to one covered symbol; None = daily behavior."""
     settings = get_settings()
     client = FixtureYFinanceClient() if settings.yfinance_fixture_mode else RealYFinanceClient()
     mode = "fixture" if settings.yfinance_fixture_mode else "live"
     try:
-        stats = await ingest_yfinance(conn, client)
+        stats = await ingest_yfinance(conn, client, only_ticker=only_ticker)
     except AdapterUnavailable as exc:
         return "unavailable", f"[{mode}] {exc}"
     if stats.tickers_failed:
@@ -82,7 +83,7 @@ async def _run_yfinance(conn) -> tuple[str, str]:
     return "ok", f"[{mode}] {stats.summary()}"
 
 
-async def _run_twse_tpex(conn) -> tuple[str, str]:
+async def _run_twse_tpex(conn, only_ticker: str | None = None) -> tuple[str, str]:
     """TW chip facts -> chip_data_tw. Fixture mode (FR-19/T9-D1) keeps CI off
     the live TWSE/TPEx OpenAPI (R-01)."""
     settings = get_settings()
@@ -90,7 +91,7 @@ async def _run_twse_tpex(conn) -> tuple[str, str]:
     client = FixtureTwseTpexClient() if fixture else RealTwseTpexClient()
     mode = "fixture" if fixture else "live"
     try:
-        stats = await ingest_twse_tpex(conn, client)
+        stats = await ingest_twse_tpex(conn, client, only_ticker=only_ticker)
     except AdapterUnavailable as exc:
         return "unavailable", f"[{mode}] {exc}"
     if stats.tickers_failed:
@@ -98,7 +99,7 @@ async def _run_twse_tpex(conn) -> tuple[str, str]:
     return "ok", f"[{mode}] {stats.summary()}"
 
 
-async def _run_edgar_13f(conn) -> tuple[str, str]:
+async def _run_edgar_13f(conn, only_ticker: str | None = None) -> tuple[str, str]:
     """US quarterly positioning (13F, delayed — R-04/FR-16) ->
     institutional_position_us. Curated filers from config (PM condition);
     fixture mode keeps CI off live EDGAR."""
@@ -108,7 +109,8 @@ async def _run_edgar_13f(conn) -> tuple[str, str]:
     client = FixtureEdgarClient(curated) if fixture else RealEdgarClient()
     mode = "fixture" if fixture else "live"
     try:
-        stats = await ingest_edgar_13f(conn, client, curated=curated)
+        stats = await ingest_edgar_13f(conn, client, curated=curated,
+                                       only_ticker=only_ticker)
     except AdapterUnavailable as exc:
         return "unavailable", f"[{mode}] {exc}"
     if stats.filers_failed:
@@ -116,7 +118,7 @@ async def _run_edgar_13f(conn) -> tuple[str, str]:
     return "ok", f"[{mode}] {stats.summary()}"
 
 
-async def _run_gdelt(conn) -> tuple[str, str]:
+async def _run_gdelt(conn, only_ticker: str | None = None) -> tuple[str, str]:
     """GDELT headlines + VADER sentiment -> news_item. Curated query phrases
     from config (the #9 precedent); fixture mode keeps CI off the live GDELT
     DOC API (R-01) and skips pacing (nothing to pace). NOTE: the summary's
@@ -130,7 +132,8 @@ async def _run_gdelt(conn) -> tuple[str, str]:
     mode = "fixture" if fixture else "live"
     try:
         stats = await ingest_gdelt(conn, client, queries=queries,
-                                   sleeper=_no_pacing if fixture else asyncio.sleep)
+                                   sleeper=_no_pacing if fixture else asyncio.sleep,
+                                   only_ticker=only_ticker)
     except AdapterUnavailable as exc:
         return "unavailable", f"[{mode}] {exc}"
     if stats.failed_symbols:
@@ -168,11 +171,14 @@ async def run_pipeline_once(run_date: date | None = None) -> None:
         for source in (*KNOWN_SOURCES, ENGINE_SOURCE, BACKTEST_SOURCE):
             # Per-source isolation: each source is its own try/except so a
             # failure never aborts peers (deck §22.4).
+            # run_kind='scheduled' (0003/ADR-009): the daily rows; on-demand
+            # audit rows live under run_kind='on_demand' and never collide.
             await conn.execute(
                 """
-                INSERT INTO pipeline_run (run_date, source_name, status, started_at)
-                VALUES ($1, $2, 'running', now())
-                ON CONFLICT (run_date, source_name)
+                INSERT INTO pipeline_run (run_date, source_name, status, started_at,
+                                          run_kind)
+                VALUES ($1, $2, 'running', now(), 'scheduled')
+                ON CONFLICT (run_date, source_name, run_kind)
                 DO UPDATE SET status = 'running', started_at = now(),
                               finished_at = NULL, message = NULL
                 """,
@@ -199,8 +205,60 @@ async def run_pipeline_once(run_date: date | None = None) -> None:
                 """
                 UPDATE pipeline_run
                 SET status = $3, finished_at = now(), message = $4
-                WHERE run_date = $1 AND source_name = $2
+                WHERE run_date = $1 AND source_name = $2 AND run_kind = 'scheduled'
                 """,
                 run_date, source, status, message,
             )
             logger.info("pipeline source=%s status=%s", source, status)
+
+
+# --- on-demand analysis (task #20, ADR-009) -----------------------------------
+
+async def run_on_demand_fetch(conn, full_symbol: str) -> dict[str, tuple[str, str]]:
+    """The four ingest sources for JUST one covered ticker — the same client
+    selection as the daily stages (the _run_* helpers) and the same per-source
+    isolation (§22.4). Outcomes are returned IN MEMORY; the caller records
+    them as run_kind='on_demand' audit rows (write_on_demand_audit) — the
+    daily 'scheduled' rows are never touched. A market-inapplicable source
+    (e.g. twse_tpex for a US symbol) honestly reads 'unavailable'."""
+    runners = {
+        "yfinance": _run_yfinance,
+        "twse_tpex": _run_twse_tpex,
+        "edgar_13f": _run_edgar_13f,
+        "gdelt": _run_gdelt,
+    }
+    outcomes: dict[str, tuple[str, str]] = {}
+    for source, runner in runners.items():
+        try:
+            outcomes[source] = await runner(conn, only_ticker=full_symbol)
+        except TimeoutError as exc:
+            # Named distinctly: the job's terminal reason maps this to the
+            # sanitized 'timeout' category (message stays in the audit row).
+            outcomes[source] = ("error", f"timeout: {exc}")
+            logger.exception("on-demand source=%s timed out", source)
+        except Exception as exc:
+            # A8 #6 log hygiene: generic status, no response bodies.
+            outcomes[source] = ("error", f"unexpected: {exc}")
+            logger.exception("on-demand source=%s crashed", source)
+    return outcomes
+
+
+# Latest on-demand outcome per source per day: run_kind='on_demand' rows are
+# upserted in place — they can never collide with (or overwrite) the daily
+# run_kind='scheduled' rows (migration 0003 widened the unique key).
+_ON_DEMAND_AUDIT_UPSERT = """
+    INSERT INTO pipeline_run (run_date, source_name, status, started_at,
+                              finished_at, message, run_kind)
+    VALUES ($1, $2, $3, now(), now(), $4, 'on_demand')
+    ON CONFLICT (run_date, source_name, run_kind)
+    DO UPDATE SET status = EXCLUDED.status, started_at = EXCLUDED.started_at,
+                  finished_at = now(), message = EXCLUDED.message
+"""
+
+
+async def write_on_demand_audit(
+    conn, run_date: date, outcomes: dict[str, tuple[str, str]]
+) -> None:
+    """Persist an on-demand run's per-source outcomes as audit rows."""
+    for source, (status, message) in outcomes.items():
+        await conn.execute(_ON_DEMAND_AUDIT_UPSERT, run_date, source, status, message)

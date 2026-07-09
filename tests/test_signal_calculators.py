@@ -374,6 +374,59 @@ def test_parse_failed_tickers_token():
     assert parse_failed_tickers(None) == frozenset()
 
 
+# --- news: on-demand §4a seam (task #20, ADR-009) -----------------------------------
+
+class _NoTableConn(_NewsConn):
+    """The override path must NEVER consult pipeline_run — the on-demand
+    fetch outcome arrives in memory, not via the table."""
+
+    async def fetchrow(self, query, *args):
+        raise AssertionError("override set: pipeline_run must not be read")
+
+
+async def test_news_override_ok_zero_rows_is_neutral_without_table_read():
+    conn = _NoTableConn(None)
+    signal = await news_signal(conn, 1, ASOF, "2330.TW",
+                               news_fetch_override="ok")
+    assert signal.status == "ok" and signal.signal == Decimal("0.00")
+    assert signal.note == "0 headlines in window"  # exact wording (QA gate)
+
+
+async def test_news_override_ok_scores_window_rows():
+    conn = _NoTableConn(None, [Decimal("0.5"), Decimal("-0.1")])
+    signal = await news_signal(conn, 1, ASOF, "2330.TW",
+                               news_fetch_override="ok")
+    assert signal.status == "ok" and signal.signal == Decimal("0.4")
+
+
+async def test_news_override_unavailable_fails_closed_before_any_read():
+    # Even with a healthy run row AND window rows present, the in-memory
+    # outcome wins: fetch failed -> unavailable, never a masked neutral/score.
+    conn = _NoTableConn({"status": "ok", "message": "ok"}, [Decimal("0.9")])
+    signal = await news_signal(conn, 1, ASOF, "2330.TW",
+                               news_fetch_override="unavailable")
+    assert signal.status == "unavailable" and signal.signal is None
+    assert signal.note == "gdelt fetch failed (on-demand)"
+
+
+async def test_news_override_none_keeps_pipeline_run_driven_behavior():
+    # Daily path byte-identical: no override -> the run row drives the ternary.
+    conn = _NewsConn({"status": "ok", "message": "ok"}, [Decimal("0.5")])
+    signal = await news_signal(conn, 1, ASOF, "2330.TW",
+                               news_fetch_override=None)
+    assert signal.status == "ok" and signal.signal == Decimal("1.0")
+
+
+async def test_news_override_d1_failclose_still_runs_first():
+    # D-1 read-side fail-close precedes the override branch in ALL cases —
+    # a malformed symbol is unavailable regardless of what the runner saw.
+    for override in ("ok", "unavailable", None):
+        signal = await news_signal(_NewsConn(None), 9, ASOF, "BAD SYM",
+                                   news_fetch_override=override)
+        assert signal.status == "unavailable"
+        assert signal.note == "symbol not token-safe"
+
+
 # --- fundamental: peer comparison ---------------------------------------------------
 
 def peer(pe=None, pb=None, net_margin=None):

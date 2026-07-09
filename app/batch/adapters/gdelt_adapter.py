@@ -311,10 +311,13 @@ async def ingest_gdelt(
     queries: dict[str, tuple[str, ...]] | None = None,
     sleeper=asyncio.sleep,
     analyzer: Any = None,
+    only_ticker: str | None = None,
 ) -> NewsIngestStats:
     """Ingest 7d headlines for all covered tickers. Raises AdapterUnavailable
     only when NOTHING succeeded (an empty-but-fetched ticker IS a success);
-    per-ticker failures are reported in stats + the failed_tickers= token."""
+    per-ticker failures are reported in stats + the failed_tickers= token.
+    Task #20 (ADR-009): only_ticker narrows the covered-ticker query to one
+    full_symbol for an on-demand run; None (the daily batch) is unchanged."""
     if queries is None:
         from app.core.config import get_settings
 
@@ -322,9 +325,16 @@ async def ingest_gdelt(
     stats = NewsIngestStats()
     analyzer = analyzer or _make_analyzer()
 
-    tickers = await conn.fetch(
-        "SELECT id, full_symbol FROM ticker WHERE is_covered ORDER BY id"
-    )
+    if only_ticker is None:
+        tickers = await conn.fetch(
+            "SELECT id, full_symbol FROM ticker WHERE is_covered ORDER BY id"
+        )
+    else:
+        tickers = await conn.fetch(
+            "SELECT id, full_symbol FROM ticker WHERE is_covered AND full_symbol = $1"
+            " ORDER BY id",
+            only_ticker,
+        )
     if not tickers:
         raise AdapterUnavailable("no covered tickers to ingest")
 

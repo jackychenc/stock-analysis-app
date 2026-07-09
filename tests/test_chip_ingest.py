@@ -48,7 +48,10 @@ class FakeChipDb:
         assert "FROM ticker" in query
         # routing is in the SQL itself: only TW exchanges may be selected
         assert "exchange IN ('TWSE','TPEx')" in query
-        return [t for t in self.tickers if t["exchange"] in ("TWSE", "TPEx")]
+        rows = [t for t in self.tickers if t["exchange"] in ("TWSE", "TPEx")]
+        if "full_symbol = $1" in query:  # task #20 only_ticker filter
+            rows = [t for t in rows if t["full_symbol"] == args[0]]
+        return rows
 
     async def executemany(self, query, rows):
         assert "chip_data_tw" in query
@@ -225,6 +228,27 @@ async def test_tw_bad_symbol_rejected_before_egress():
     assert [c[0] for c in client.calls] == ["2330"]
 
 
+# --- TWSE/TPEx task #20: only_ticker (on-demand single-ticker runs) -----------
+
+async def test_tw_only_ticker_touches_exactly_that_ticker():
+    db = FakeChipDb([TW1, TW2, US1])
+    client = ScriptedChipClient(rows={"2330": [chip_row()], "6488": [chip_row()]})
+    stats = await ingest_twse_tpex(db, client, asof=ASOF, sleeper=no_sleep,
+                                   only_ticker="2330.TW")
+    assert stats.tickers_ok == 1
+    assert client.calls == [("2330", "TWSE")]  # 6488 untouched; AAPL never routed
+    assert [r[0] for r in db.rows] == [1]
+
+
+async def test_tw_only_ticker_us_symbol_is_adapter_unavailable():
+    # Market routing survives the filter: a US symbol matches no TW row —
+    # the on-demand runner reads this source honestly as 'unavailable'.
+    db = FakeChipDb([TW1, US1])
+    with pytest.raises(AdapterUnavailable):
+        await ingest_twse_tpex(db, ScriptedChipClient(), asof=ASOF,
+                               sleeper=no_sleep, only_ticker="AAPL")
+
+
 # --- TWSE/TPEx bucket 4: deterministic fixture mode ---------------------------
 
 async def test_tw_fixture_mode_is_deterministic():
@@ -256,7 +280,10 @@ class FakeEdgarDb:
     async def fetch(self, query, *args):
         assert "FROM ticker" in query
         assert "exchange = 'US'" in query  # US-only routing in the SQL itself
-        return [t for t in self.tickers if t["exchange"] == "US"]
+        rows = [t for t in self.tickers if t["exchange"] == "US"]
+        if "full_symbol = $1" in query:  # task #20 only_ticker filter
+            rows = [t for t in rows if t["full_symbol"] == args[0]]
+        return rows
 
     async def executemany(self, query, rows):
         assert "institutional_position_us" in query
@@ -330,6 +357,35 @@ async def test_edgar_unmapped_ticker_gets_zero_rows_not_error():
                                    curated=CURATED)
     assert stats.filers_ok == 2 and stats.filers_failed == 0
     assert [r[0] for r in db.rows] == [3]  # only AAPL's ticker_id, no TSLA row
+
+
+# --- EDGAR task #20: only_ticker (on-demand single-ticker runs) -----------------
+
+async def test_edgar_only_ticker_restricts_rows_to_that_ticker():
+    # The filer stays the unit of fetch (both CIKs are still queried), but
+    # only the requested ticker's CUSIP can land rows.
+    both = Curated13F(filers=(FILER_A, FILER_B),
+                      cusip_map={"AAPL": "037833100", "TSLA": "88160R101"})
+    db = FakeEdgarDb([US1, US2])
+    client = ScriptedEdgarClient(filings={
+        FILER_A.cik: filing(FILER_A.name, [aapl_holding(),
+                                           {"cusip": "88160R101",
+                                            "shares": 10, "value": 1}]),
+        FILER_B.cik: filing(FILER_B.name, [aapl_holding()]),
+    })
+    stats = await ingest_edgar_13f(db, client, asof=ASOF, sleeper=no_sleep,
+                                   curated=both, only_ticker="AAPL")
+    assert stats.filers_ok == 2
+    assert {r[0] for r in db.rows} == {3}  # AAPL only — no TSLA rows
+    assert sorted(client.calls) == sorted([FILER_A.cik, FILER_B.cik])
+
+
+async def test_edgar_only_ticker_tw_symbol_is_adapter_unavailable():
+    db = FakeEdgarDb([TW1, US1])
+    with pytest.raises(AdapterUnavailable):
+        await ingest_edgar_13f(db, ScriptedEdgarClient(), asof=ASOF,
+                               sleeper=no_sleep, curated=CURATED,
+                               only_ticker="2330.TW")
 
 
 # --- EDGAR bucket 2: invalid holdings / hostile filer name ---------------------

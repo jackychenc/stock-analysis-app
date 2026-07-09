@@ -215,15 +215,25 @@ async def ingest_yfinance(
     *,
     asof: date | None = None,
     sleeper=asyncio.sleep,
+    only_ticker: str | None = None,
 ) -> IngestStats:
     """Ingest all covered tickers. Raises AdapterUnavailable only when NOTHING
-    succeeded; partial failures are reported in stats (honest, not fatal)."""
+    succeeded; partial failures are reported in stats (honest, not fatal).
+    Task #20 (ADR-009): only_ticker narrows the covered-ticker query to one
+    full_symbol for an on-demand run; None (the daily batch) is unchanged."""
     stats = IngestStats()
     asof = asof or date.today()
 
-    tickers = await conn.fetch(
-        "SELECT id, full_symbol FROM ticker WHERE is_covered ORDER BY id"
-    )
+    if only_ticker is None:
+        tickers = await conn.fetch(
+            "SELECT id, full_symbol FROM ticker WHERE is_covered ORDER BY id"
+        )
+    else:
+        tickers = await conn.fetch(
+            "SELECT id, full_symbol FROM ticker WHERE is_covered AND full_symbol = $1"
+            " ORDER BY id",
+            only_ticker,
+        )
     if not tickers:
         raise AdapterUnavailable("no covered tickers to ingest")
 
@@ -243,6 +253,11 @@ async def ingest_yfinance(
 
     if stats.tickers_ok == 0:
         raise AdapterUnavailable(f"all tickers failed: {'; '.join(stats.failures)}")
+
+    if only_ticker is not None:
+        # On-demand runs are per-ticker (task #20): the GLOBAL benchmark bars
+        # belong to the nightly batch (task #13) — no extra egress here.
+        return stats
 
     # Task #13: benchmarks AFTER the covered universe — their bars feed the
     # backtest stage only (is_covered=FALSE, never scored). Same per-symbol

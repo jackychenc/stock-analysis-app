@@ -225,15 +225,19 @@ CREATE TABLE supply_chain_edge (
 );
 
 -- pipeline_run — per-source ingestion status, drives /pipeline/status + R-01 alerting.
+-- run_kind (v1.2.10 / ADR-009, task #20): 'scheduled' = the nightly batch;
+-- 'on_demand' = the latest on-demand analysis outcome per source per day —
+-- audit rows that never collide with (or overwrite) the daily rows.
 CREATE TABLE pipeline_run (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     run_date    DATE        NOT NULL,
     source_name TEXT        NOT NULL,          -- 'yfinance'|'twse_tpex'|'edgar_13f'|'gdelt'
     status      TEXT        NOT NULL,          -- 'ok'|'unavailable'|'running'|'error'
+    run_kind    TEXT        NOT NULL DEFAULT 'scheduled',   -- 'scheduled'|'on_demand'
     started_at  TIMESTAMPTZ,
     finished_at TIMESTAMPTZ,
     message     TEXT,
-    UNIQUE (run_date, source_name)
+    UNIQUE (run_date, source_name, run_kind)
 );
 CREATE INDEX ix_pipeline_run_date ON pipeline_run (run_date DESC);
 

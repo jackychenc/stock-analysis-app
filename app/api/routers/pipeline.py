@@ -12,7 +12,13 @@ router = APIRouter(prefix="/pipeline", tags=["ops"], dependencies=[Depends(curre
 async def pipeline_status() -> PipelineStatus:
     pool = await get_pool()
     async with pool.acquire() as conn:
-        latest = await conn.fetchrow("SELECT max(run_date) AS run_date FROM pipeline_run")
+        # run_kind='scheduled' everywhere (task #20): /pipeline/status reports
+        # the NIGHTLY batch (NFR-01 SLA, R-01 alerting) — on-demand audit rows
+        # are per-ticker probes and must never masquerade as a daily outcome.
+        latest = await conn.fetchrow(
+            "SELECT max(run_date) AS run_date FROM pipeline_run"
+            " WHERE run_kind = 'scheduled'"
+        )
         run_date = latest["run_date"] if latest else None
         rows = await conn.fetch(
             """
@@ -20,13 +26,16 @@ async def pipeline_status() -> PipelineStatus:
                 (SELECT count(*) FROM (
                     SELECT run_date FROM pipeline_run p2
                     WHERE p2.source_name = p1.source_name
+                      AND p2.run_kind = 'scheduled'
                       AND p2.status IN ('unavailable', 'error')
                       AND p2.run_date > COALESCE(
                           (SELECT max(p3.run_date) FROM pipeline_run p3
-                           WHERE p3.source_name = p1.source_name AND p3.status = 'ok'),
+                           WHERE p3.source_name = p1.source_name
+                             AND p3.run_kind = 'scheduled' AND p3.status = 'ok'),
                           '1970-01-01')
                 ) bad) AS consecutive_bad_days
             FROM pipeline_run p1
+            WHERE p1.run_kind = 'scheduled'
             ORDER BY source_name, run_date DESC
             """
         )

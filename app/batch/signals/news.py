@@ -20,6 +20,15 @@ MACHINE-STABLE COUPLING: the `failed_tickers=SYM1,SYM2` token (comma-joined,
 no spaces) is emitted by adapters/gdelt_adapter.NewsIngestStats.summary()
 into pipeline_run.message and parsed here. Change the format only in
 lockstep with that module.
+
+ON-DEMAND SEAM (task #20, ADR-009): an on-demand run's gdelt outcome never
+lands in the daily pipeline_run row, so its runner passes the fetch outcome
+IN MEMORY via news_fetch_override ('ok' | 'unavailable') — A8's fetch-boundary
+rule satisfied in-process instead of via the table. 'ok' skips the
+pipeline_run/token checks and goes straight to the window-row read;
+'unavailable' fails the lens closed immediately. The DAILY engine passes
+None and reads the run_kind='scheduled' row exactly as before; the D-1
+read-side fail-close runs FIRST in all cases.
 """
 
 import re
@@ -62,27 +71,38 @@ def news_score(sentiments: list[Decimal]) -> ModuleSignal:
     )
 
 
-async def news_signal(conn: Any, ticker_id: int, asof: date,
-                      full_symbol: str) -> ModuleSignal:
+async def news_signal(conn: Any, ticker_id: int, asof: date, full_symbol: str,
+                      news_fetch_override: str | None = None) -> ModuleSignal:
     # D-1 read-side fail-close: a symbol that cannot be represented in the
     # failed_tickers= token (SYMBOL_RE excludes whitespace/commas) can never
     # trust the token — its failure could have been unrepresentable. Treat
-    # its news lens as unavailable outright, never a masked neutral.
+    # its news lens as unavailable outright, never a masked neutral. Runs
+    # BEFORE the on-demand override branch — fail-close is unconditional.
     if not SYMBOL_RE.fullmatch(full_symbol):
         return unavailable("symbol not token-safe")
-    # A8 integrity rule: status derives from the fetch outcome FIRST; the
-    # window rows are only read once the fetch is known good for this ticker.
-    run = await conn.fetchrow(
-        "SELECT status, message FROM pipeline_run"
-        " WHERE run_date = $1 AND source_name = 'gdelt'",
-        asof,
-    )
-    if run is None:
-        return unavailable("gdelt not fetched for this date")
-    if run["status"] != "ok":
-        return unavailable(f"gdelt source {run['status']}")
-    if full_symbol in parse_failed_tickers(run["message"]):
-        return unavailable("gdelt ticker query failed")
+    if news_fetch_override is not None:
+        # Task #20 seam: the on-demand runner observed the fetch outcome
+        # in-process (the §4a discriminator, carried in memory per A8) — the
+        # daily pipeline_run row is not this run's evidence.
+        if news_fetch_override != "ok":
+            return unavailable("gdelt fetch failed (on-demand)")
+    else:
+        # A8 integrity rule: status derives from the fetch outcome FIRST; the
+        # window rows are only read once the fetch is known good for this
+        # ticker. run_kind='scheduled' (0003): on-demand audit rows share the
+        # table but are never the daily fetch evidence.
+        run = await conn.fetchrow(
+            "SELECT status, message FROM pipeline_run"
+            " WHERE run_date = $1 AND source_name = 'gdelt'"
+            " AND run_kind = 'scheduled'",
+            asof,
+        )
+        if run is None:
+            return unavailable("gdelt not fetched for this date")
+        if run["status"] != "ok":
+            return unavailable(f"gdelt source {run['status']}")
+        if full_symbol in parse_failed_tickers(run["message"]):
+            return unavailable("gdelt ticker query failed")
 
     # Bounded window [asof-7d 00:00, asof+1d 00:00) UTC — the upper bound
     # keeps historical re-reads deterministic (later news never leaks back).

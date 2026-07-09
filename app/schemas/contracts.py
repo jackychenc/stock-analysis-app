@@ -102,6 +102,10 @@ class Dashboard(BaseModel):
     recommendation: Recommendation | None
     modules: DashboardModules
     supply_chain_available: bool = False
+    # ADR-009 (task #20, A3 additive ruling): server-authoritative Refresh
+    # availability — ISO timestamp while inside the on-demand cooldown, null
+    # once Refresh is available. Never derived client-side (drift = dead-end).
+    next_refresh_at: datetime | None = None
     disclaimer: str = DISCLAIMER  # FR-39: server includes disclaimer in payload
     disclaimer_version: str = DISCLAIMER_VERSION  # audit trace (criterion 7)
 

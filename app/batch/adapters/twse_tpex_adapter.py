@@ -442,16 +442,27 @@ async def ingest_twse_tpex(
     *,
     asof: date | None = None,
     sleeper=asyncio.sleep,
+    only_ticker: str | None = None,
 ) -> ChipIngestStats:
     """Ingest chip facts for all covered TW tickers. Raises AdapterUnavailable
-    only when NOTHING succeeded; partial failures are reported in stats."""
+    only when NOTHING succeeded; partial failures are reported in stats.
+    Task #20 (ADR-009): only_ticker narrows the covered-ticker query to one
+    full_symbol for an on-demand run; None (the daily batch) is unchanged."""
     stats = ChipIngestStats()
 
     # T9-S3 market routing: TWSE/TPEx rows only — US tickers never reach here.
-    tickers = await conn.fetch(
-        "SELECT id, symbol, exchange, full_symbol FROM ticker "
-        "WHERE is_covered AND exchange IN ('TWSE','TPEx') ORDER BY id"
-    )
+    if only_ticker is None:
+        tickers = await conn.fetch(
+            "SELECT id, symbol, exchange, full_symbol FROM ticker "
+            "WHERE is_covered AND exchange IN ('TWSE','TPEx') ORDER BY id"
+        )
+    else:
+        tickers = await conn.fetch(
+            "SELECT id, symbol, exchange, full_symbol FROM ticker "
+            "WHERE is_covered AND exchange IN ('TWSE','TPEx') AND full_symbol = $1 "
+            "ORDER BY id",
+            only_ticker,
+        )
     if not tickers:
         raise AdapterUnavailable("no covered TW tickers to ingest")
 

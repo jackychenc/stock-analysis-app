@@ -344,14 +344,19 @@ async def score_ticker(
     weights: dict[str, Decimal],
     horizon_months: int,
     methodology_version: str,
+    news_fetch_override: str | None = None,
 ) -> EngineResult | None:
     """Compute all 4 lens signals for one ticker and persist the daily
     recommendation. Returns None (no row) when NO module has data at all —
-    a fresh install shouldn't mint all-unavailable suppressed rows."""
+    a fresh install shouldn't mint all-unavailable suppressed rows.
+    news_fetch_override (task #20, ADR-009) threads an on-demand run's
+    in-memory gdelt fetch outcome to the news lens (the §4a seam); the daily
+    engine passes None and news_signal reads the pipeline_run row as before."""
     technical, latest_close = await technical_signal(conn, ticker["id"], rec_date)
     fundamental, peer_median_pe, trailing_eps = await fundamental_signal(conn, ticker["id"])
     chip = await chip_signal(conn, ticker["id"], ticker["exchange"])
-    news = await news_signal(conn, ticker["id"], rec_date, ticker["full_symbol"])
+    news = await news_signal(conn, ticker["id"], rec_date, ticker["full_symbol"],
+                             news_fetch_override=news_fetch_override)
 
     lenses: dict[str, ModuleSignal] = {
         "technical": technical, "fundamental": fundamental,

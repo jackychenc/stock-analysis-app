@@ -52,6 +52,8 @@ class FakeNewsDb:
 
     async def fetch(self, query, *args):
         assert "FROM ticker" in query and "is_covered" in query
+        if "full_symbol = $1" in query:  # task #20 only_ticker filter
+            return [t for t in self.tickers if t["full_symbol"] == args[0]]
         return self.tickers
 
     async def executemany(self, query, rows):
@@ -366,6 +368,28 @@ async def test_pacing_between_tickers():
     await ingest_gdelt(db, FixtureGdeltClient(), queries=QUERIES,
                        sleeper=record_sleep)
     assert delays.count(PACING_DELAY_S) == 2  # N tickers -> N-1 pacing pauses
+
+
+# --- task #20: only_ticker (on-demand single-ticker runs) ----------------------------
+
+async def test_only_ticker_queries_exactly_that_ticker():
+    db = FakeNewsDb([TW1, TW2, US1])
+    client = ScriptedGdeltClient(articles={"2330.TW": [art()]})
+    stats = await ingest_gdelt(db, client, queries=QUERIES, sleeper=no_sleep,
+                               analyzer=StubAnalyzer(), only_ticker="2330.TW")
+    assert stats.tickers_ok == 1 and stats.failed_symbols == []
+    assert [c[0] for c in client.calls] == ["2330.TW"]  # peers never queried
+    assert {r[0] for r in db.rows.values()} == {1}
+
+
+async def test_only_ticker_single_failure_is_adapter_unavailable():
+    # With one ticker in scope, its query failing == all tickers failed —
+    # the on-demand runner reads the source honestly as 'unavailable'.
+    db = FakeNewsDb([TW1, US1])
+    client = ScriptedGdeltClient(errors={"2330.TW": RuntimeError("HTTP 503")})
+    with pytest.raises(AdapterUnavailable):
+        await ingest_gdelt(db, client, queries=QUERIES, sleeper=no_sleep,
+                           analyzer=StubAnalyzer(), only_ticker="2330.TW")
 
 
 # --- gate 13: seendate parsing -------------------------------------------------------

@@ -269,10 +269,15 @@ async def ingest_edgar_13f(
     asof: date | None = None,
     sleeper=asyncio.sleep,
     curated: Curated13F | None = None,
+    only_ticker: str | None = None,
 ) -> EdgarIngestStats:
     """Ingest latest 13F positions for curated filers x covered US tickers.
     Raises AdapterUnavailable only when NO filer succeeded; partial failures
-    are reported in stats (honest, not fatal)."""
+    are reported in stats (honest, not fatal). Task #20 (ADR-009): only_ticker
+    narrows the covered-ticker query to one full_symbol for an on-demand run
+    (the filer fetches are unchanged — the filer is the unit of fetch, but
+    only that ticker's CUSIP can land rows); None (the daily batch) is
+    unchanged."""
     if curated is None:
         from app.core.config import get_settings
 
@@ -280,10 +285,17 @@ async def ingest_edgar_13f(
     stats = EdgarIngestStats()
 
     # T9-S3 market routing: US tickers only — TW tickers never reach EDGAR.
-    tickers = await conn.fetch(
-        "SELECT id, full_symbol FROM ticker "
-        "WHERE is_covered AND exchange = 'US' ORDER BY id"
-    )
+    if only_ticker is None:
+        tickers = await conn.fetch(
+            "SELECT id, full_symbol FROM ticker "
+            "WHERE is_covered AND exchange = 'US' ORDER BY id"
+        )
+    else:
+        tickers = await conn.fetch(
+            "SELECT id, full_symbol FROM ticker "
+            "WHERE is_covered AND exchange = 'US' AND full_symbol = $1 ORDER BY id",
+            only_ticker,
+        )
     if not tickers:
         raise AdapterUnavailable("no covered US tickers to ingest")
 

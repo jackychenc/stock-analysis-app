@@ -17,6 +17,10 @@ from fastapi.testclient import TestClient
 # secret, so this MUST be set before any app.main import below.
 TEST_JWT_SECRET = "0123456789abcdef" * 4
 os.environ.setdefault("JWT_SECRET", TEST_JWT_SECRET)
+# Task #20: never start the in-process analysis worker under tests — the
+# background queue consumer would race route-level job-state assertions (and
+# reach for a live Redis). Worker behavior is tested directly.
+os.environ.setdefault("ANALYSIS_WORKER_ENABLED", "false")
 
 import app.db.pool as pool_module  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
@@ -90,6 +94,13 @@ class FakeConnection:
         if "min(rec_date)" in q:  # task #13 history gate
             recs = self.store["recommendations"]
             return min((r["rec_date"] for r in recs), default=None)
+        if "max(rec_date)" in q:  # task #20 /analyze freshness check
+            recs = [r["rec_date"] for r in self.store["recommendations"]
+                    if r["ticker_id"] == args[0]]
+            return max(recs, default=None)
+        if "count(*) from ticker" in q:  # task #20 FR-61 pool-cap count
+            assert "is_covered" in q  # benchmarks must never count
+            return sum(1 for t in self.store["tickers"].values() if t["is_covered"])
         return 1
 
     async def execute(self, query: str, *args):
@@ -121,6 +132,55 @@ class FakePool:
         return _Acquire(self.conn)
 
 
+class FakeRedis:
+    """Tiny in-memory redis.asyncio stand-in (task #20) — only the ops the
+    on-demand job store/queue uses: hashes, strings, one list + blpop. Tests
+    never need a live Redis."""
+
+    def __init__(self):
+        self.hashes: dict[str, dict[str, str]] = {}
+        self.strings: dict[str, str] = {}
+        self.lists: dict[str, list[str]] = {}
+
+    async def hset(self, key: str, mapping: dict):
+        self.hashes.setdefault(key, {}).update(
+            {k: str(v) for k, v in mapping.items()}
+        )
+
+    async def hget(self, key: str, field: str):
+        return self.hashes.get(key, {}).get(field)
+
+    async def hgetall(self, key: str) -> dict:
+        return dict(self.hashes.get(key, {}))
+
+    async def set(self, key: str, value):
+        self.strings[key] = str(value)
+
+    async def get(self, key: str):
+        return self.strings.get(key)
+
+    async def delete(self, *keys: str):
+        for key in keys:
+            self.hashes.pop(key, None)
+            self.strings.pop(key, None)
+            self.lists.pop(key, None)
+
+    async def rpush(self, key: str, value):
+        self.lists.setdefault(key, []).append(str(value))
+
+    async def blpop(self, key: str, timeout: float = 0):
+        import asyncio
+
+        items = self.lists.get(key)
+        if items:
+            return key, items.pop(0)
+        await asyncio.sleep(0)  # yield to peers; never actually block a test
+        return None
+
+    async def aclose(self):
+        return None
+
+
 @pytest.fixture
 def store() -> dict:
     default_weights = json.dumps(
@@ -148,7 +208,12 @@ def store() -> dict:
 
 
 @pytest.fixture
-def client(monkeypatch, store) -> TestClient:
+def fake_redis() -> FakeRedis:
+    return FakeRedis()
+
+
+@pytest.fixture
+def client(monkeypatch, store, fake_redis) -> TestClient:
     monkeypatch.setenv("ADMIN_USERNAME", TEST_USER)
     monkeypatch.setenv("ADMIN_PASSWORD_HASH", hash_password(TEST_PASSWORD))
     get_settings.cache_clear()
@@ -160,13 +225,24 @@ def client(monkeypatch, store) -> TestClient:
 
     monkeypatch.setattr(pool_module, "get_pool", fake_get_pool)
     # Routers imported get_pool by reference; patch their module globals too.
+    import app.api.routers.analyze as analyze_router
     import app.api.routers.config as config_router
     import app.api.routers.pipeline as pipeline_router
     import app.api.routers.recommendations as rec_router
     import app.api.routers.stocks as stocks_router
 
-    for mod in (stocks_router, rec_router, config_router, pipeline_router):
+    for mod in (stocks_router, rec_router, config_router, pipeline_router,
+                analyze_router):
         monkeypatch.setattr(mod, "get_pool", fake_get_pool)
+
+    # Task #20: the analyze routes talk to Redis — same by-reference patching.
+    import app.db.redis as redis_module
+
+    async def fake_get_redis():
+        return fake_redis
+
+    for mod in (redis_module, analyze_router):
+        monkeypatch.setattr(mod, "get_redis", fake_get_redis)
 
     test_app = create_app()
     with TestClient(test_app, raise_server_exceptions=False) as c:

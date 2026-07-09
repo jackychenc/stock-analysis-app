@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.deps import current_user
 from app.db.pool import get_pool
+from app.db.redis import get_redis
 from app.schemas.contracts import (
     BacktestResult,
     Dashboard,
@@ -11,7 +12,7 @@ from app.schemas.contracts import (
     ModuleStatus,
     SupplyChainGraph,
 )
-from app.services import read_service
+from app.services import analysis_jobs, read_service
 from app.services.backtest_engine import compute_ticker_backtest
 
 router = APIRouter(prefix="/stocks", tags=["stocks"], dependencies=[Depends(current_user)])
@@ -35,7 +36,17 @@ async def dashboard(ticker: str) -> Dashboard:
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await _covered_ticker_or_404(conn, ticker)
-        return await read_service.fetch_dashboard(conn, row)
+        dash = await read_service.fetch_dashboard(conn, row)
+    # ADR-009 next_refresh_at: cooldown state lives in Redis; a Redis hiccup
+    # degrades to null (Refresh appears available; the POST still enforces
+    # the cooldown server-side) rather than failing the snapshot read.
+    try:
+        r = await get_redis()
+        dash.next_refresh_at = await analysis_jobs.next_refresh_at(
+            r, row["full_symbol"])
+    except Exception:  # noqa: BLE001 — availability of the snapshot wins
+        pass
+    return dash
 
 
 def _module_detail_stub(module: str) -> ModuleDetail:

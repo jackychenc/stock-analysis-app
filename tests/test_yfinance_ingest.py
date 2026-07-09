@@ -29,6 +29,8 @@ class FakeDb:
 
     async def fetch(self, query, *args):
         assert "FROM ticker" in query
+        if "full_symbol = $1" in query:  # task #20 only_ticker filter
+            return [t for t in self.tickers if t["full_symbol"] == args[0]]
         return self.tickers
 
     async def fetchval(self, query, *args):
@@ -284,6 +286,26 @@ async def test_fixture_mode_is_deterministic_and_offline():
     assert db1.bar_rows == db2.bar_rows  # byte-stable re-runs (FR-19)
     assert db1.fundamental_rows == db2.fundamental_rows
     assert len(db1.bar_rows) > 300  # backfill depth for backtest history
+
+
+# --- task #20: only_ticker (on-demand single-ticker runs) ---------------------
+
+async def test_only_ticker_touches_exactly_that_ticker_and_no_benchmarks():
+    db = FakeDb([T1, T2])
+    client = ScriptedClient(bars={"AAPL": [good_bar(close=200.0)]},
+                            info={"AAPL": GOOD_INFO})
+    stats = await ingest_yfinance(db, client, asof=ASOF, sleeper=no_sleep,
+                                  only_ticker="AAPL")
+    assert stats.tickers_ok == 1 and stats.tickers_failed == 0
+    assert {c[1] for c in client.calls} == {"AAPL"}  # no peers, no ^TWII/^GSPC
+    assert stats.benchmarks_ok == 0 and db.benchmark_ticker_rows == []
+
+
+async def test_only_ticker_unknown_symbol_is_adapter_unavailable():
+    db = FakeDb([T1, T2])
+    with pytest.raises(AdapterUnavailable):
+        await ingest_yfinance(db, ScriptedClient(), asof=ASOF, sleeper=no_sleep,
+                              only_ticker="NOPE")
 
 
 # --- task #13: benchmark ingestion (^TWII / ^GSPC) ----------------------------
