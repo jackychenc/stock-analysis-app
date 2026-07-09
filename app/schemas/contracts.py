@@ -192,7 +192,9 @@ class PipelineStatus(BaseModel):
 
 
 class ApiError(BaseModel):
-    code: Literal["SECTOR_NOT_COVERED", "UNAUTHORIZED", "VALIDATION_ERROR", "TOTAL_OUTAGE"]
+    # COVERAGE_POOL_FULL: FR-61 at-cap 409 (A3 additive ruling, adopted task #14).
+    code: Literal["SECTOR_NOT_COVERED", "UNAUTHORIZED", "VALIDATION_ERROR",
+                  "TOTAL_OUTAGE", "COVERAGE_POOL_FULL"]
     message: str
 
 

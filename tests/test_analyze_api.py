@@ -121,7 +121,7 @@ def test_pool_at_cap_blocks_new_ticker_with_surfaced_409(web_client, fake_redis,
     r = web_client.post(ANALYZE, json={"ticker": "TSLA"})
     assert r.status_code == 409
     detail = r.json()["detail"]
-    assert detail["code"] == "VALIDATION_ERROR"
+    assert detail["code"] == "COVERAGE_POOL_FULL"  # dedicated code (A3, task #14)
     assert "2" in detail["message"]  # the cap is NAMED — surfaced, never silent
     assert queued_payloads(fake_redis) == []
 

@@ -9,7 +9,6 @@ from app.schemas.contracts import (
     BacktestResult,
     Dashboard,
     ModuleDetail,
-    ModuleStatus,
     SupplyChainGraph,
 )
 from app.services import analysis_jobs, read_service
@@ -49,41 +48,40 @@ async def dashboard(ticker: str) -> Dashboard:
     return dash
 
 
-def _module_detail_stub(module: str) -> ModuleDetail:
-    """Lens-detail series are populated by ingestion (tasks #8/#9/#12)."""
-    return ModuleDetail(module=module, status=ModuleStatus.unavailable, series=[])
-
+# Lens-detail reads (task #14): read-only fact queries into the frozen
+# ModuleDetail envelope — series/score/as_of come from what the batch
+# persisted (NFR-02: no computation on the request path).
 
 @router.get("/{ticker}/technical", response_model=ModuleDetail)
 async def technical(ticker: str) -> ModuleDetail:
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await _covered_ticker_or_404(conn, ticker)
-    return _module_detail_stub("technical")
+        row = await _covered_ticker_or_404(conn, ticker)
+        return await read_service.fetch_technical_detail(conn, row)
 
 
 @router.get("/{ticker}/fundamentals", response_model=ModuleDetail)
 async def fundamentals(ticker: str) -> ModuleDetail:
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await _covered_ticker_or_404(conn, ticker)
-    return _module_detail_stub("fundamental")
+        row = await _covered_ticker_or_404(conn, ticker)
+        return await read_service.fetch_fundamental_detail(conn, row)
 
 
 @router.get("/{ticker}/news", response_model=ModuleDetail)
 async def news(ticker: str) -> ModuleDetail:
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await _covered_ticker_or_404(conn, ticker)
-    return _module_detail_stub("news")
+        row = await _covered_ticker_or_404(conn, ticker)
+        return await read_service.fetch_news_detail(conn, row)
 
 
 @router.get("/{ticker}/chip", response_model=ModuleDetail)
 async def chip(ticker: str) -> ModuleDetail:
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await _covered_ticker_or_404(conn, ticker)
-    return _module_detail_stub("chip")
+        row = await _covered_ticker_or_404(conn, ticker)
+        return await read_service.fetch_chip_detail(conn, row)
 
 
 @router.get("/{ticker}/supply-chain", response_model=SupplyChainGraph)

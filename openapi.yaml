@@ -197,7 +197,8 @@ components:
       type: object
       required: [code, message]
       properties:
-        code: { type: string, enum: [SECTOR_NOT_COVERED, UNAUTHORIZED, VALIDATION_ERROR, TOTAL_OUTAGE] }
+        # COVERAGE_POOL_FULL: FR-61 at-cap 409 on POST /analyze (additive, task #14).
+        code: { type: string, enum: [SECTOR_NOT_COVERED, UNAUTHORIZED, VALIDATION_ERROR, TOTAL_OUTAGE, COVERAGE_POOL_FULL] }
         message: { type: string }
 
     LoginRequest:

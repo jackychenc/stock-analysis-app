@@ -95,14 +95,11 @@ async def analyze(body: AnalyzeRequest):
                 "SELECT count(*) FROM ticker WHERE is_covered"
             )
             if pool_size >= settings.max_coverage_pool_size:
-                # FR-61: surfaced, never silent. A dedicated error code would
-                # be an OpenAPI change — A3's call at gate; VALIDATION_ERROR
-                # is the closest frozen ApiError code and the message names
-                # the cap.
+                # FR-61: surfaced, never silent — dedicated code (A3 enum).
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail={
-                        "code": "VALIDATION_ERROR",
+                        "code": "COVERAGE_POOL_FULL",
                         # A1/A4 condition: actionable, never a dead-end —
                         # name the cap AND the current remedy (config path;
                         # #14 adds the manage-pool UI link).

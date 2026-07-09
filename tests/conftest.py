@@ -57,6 +57,20 @@ class FakeConnection:
             return max(recs, key=lambda r: r["rec_date"]) if recs else None
         if "from user_config" in q:
             return self.store["user_config"]
+        if "from technical_indicator" in q:  # task #14 technical lens detail
+            rows = [r for r in self.store.get("technical_indicators", [])
+                    if r["ticker_id"] == args[0]]
+            return max(rows, key=lambda r: r["calc_date"]) if rows else None
+        if "from fundamental" in q:  # task #14 fundamental lens detail
+            rows = [r for r in self.store.get("fundamentals", [])
+                    if r["ticker_id"] == args[0]]
+            return max(rows, key=lambda r: r["asof_date"]) if rows else None
+        if "from pipeline_run" in q and "order by run_date desc" in q:
+            # task #14 news lens detail: latest scheduled gdelt fetch evidence
+            runs = [r for r in self.store["pipeline_runs"]
+                    if r["source_name"] == "gdelt"
+                    and r.get("run_kind", "scheduled") == "scheduled"]
+            return max(runs, key=lambda r: r["run_date"]) if runs else None
         if "max(run_date)" in q:
             runs = self.store["pipeline_runs"]
             return {"run_date": max((r["run_date"] for r in runs), default=None)}
@@ -68,8 +82,37 @@ class FakeConnection:
         q = " ".join(query.split()).lower()
         if "from pipeline_run" in q:
             return []
+        if "from price_bar" in q and "order by bar_date desc" in q:
+            # task #14 technical lens detail: newest N bars for one ticker
+            bars = [b for b in self.store.get("price_bars", [])
+                    if b.get("ticker_id") == args[0]]
+            return sorted(bars, key=lambda b: b["bar_date"], reverse=True)[: args[1]]
         if "from price_bar" in q:  # task #13 backtest bar load
             return [b for b in self.store.get("price_bars", []) if b["bar_date"] <= args[0]]
+        if "from chip_data_tw" in q:  # task #14 chip lens detail (TW)
+            rows = [r for r in self.store.get("chip_tw", [])
+                    if r["ticker_id"] == args[0]]
+            return sorted(rows, key=lambda r: r["trade_date"], reverse=True)[: args[1]]
+        if "filer_count" in q:  # task #14 chip lens detail (US 13F aggregates)
+            rows = [r for r in self.store.get("us_positions", [])
+                    if r["ticker_id"] == args[0] and r.get("shares") is not None]
+            by_quarter: dict = {}
+            for r in rows:
+                agg = by_quarter.setdefault(
+                    r["quarter"],
+                    {"quarter": r["quarter"], "total_shares": 0, "filer_count": 0},
+                )
+                agg["total_shares"] += r["shares"]
+                agg["filer_count"] += 1
+            ordered = sorted(by_quarter.values(),
+                             key=lambda a: a["quarter"], reverse=True)
+            return ordered[: args[1]]
+        if "from news_item" in q:  # task #14 news lens detail window
+            rows = [r for r in self.store.get("news_items", [])
+                    if r["ticker_id"] == args[0]
+                    and args[1] <= r["published_at"] < args[2]]
+            return sorted(rows, key=lambda r: r["published_at"],
+                          reverse=True)[: args[3]]
         if "r.rec_date >= $1" in q:  # task #13 backtest rec load (windowed)
             rows = []
             for r in self.store["recommendations"]:
@@ -101,6 +144,11 @@ class FakeConnection:
         if "count(*) from ticker" in q:  # task #20 FR-61 pool-cap count
             assert "is_covered" in q  # benchmarks must never count
             return sum(1 for t in self.store["tickers"].values() if t["is_covered"])
+        if "select score from institutional_position_us" in q:  # task #14
+            rows = [r for r in self.store.get("us_positions", [])
+                    if r["ticker_id"] == args[0] and r.get("score") is not None]
+            return (max(rows, key=lambda r: r["quarter"])["score"]
+                    if rows else None)
         return 1
 
     async def execute(self, query: str, *args):
