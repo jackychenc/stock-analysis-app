@@ -994,7 +994,7 @@ requires-dist = [
     { name = "redis", specifier = ">=5.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
     { name = "vadersentiment", specifier = "==3.3.2" },
-    { name = "yfinance", specifier = ">=0.2.50" },
+    { name = "yfinance", specifier = "==1.5.1" },
 ]
 
 [package.metadata.requires-dev]

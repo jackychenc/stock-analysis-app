@@ -27,7 +27,6 @@ from typing import Any, Protocol
 
 from app.batch.adapters.common import (
     PACING_DELAY_S,
-    REQUEST_TIMEOUT_S,
     AdapterUnavailable,
     _int,
     _num,
@@ -87,9 +86,12 @@ class RealYFinanceClient:
     def fetch_daily_bars(self, symbol: str, period: str) -> list[dict[str, Any]]:
         import yfinance as yf
 
+        # yfinance 1.x dropped the per-call timeout kwarg (G3 finding, A7 live
+        # run): the lib bounds its own HTTP internally; the adapter layer keeps
+        # bounded retries + pacing, and a hard await-timeout is a #16
+        # ops-hardening item (A8 lane). Passing timeout= raises TypeError.
         frame = yf.Ticker(symbol).history(period=period, interval="1d",
-                                          auto_adjust=False,
-                                          timeout=REQUEST_TIMEOUT_S)
+                                          auto_adjust=False)
         bars: list[dict[str, Any]] = []
         for ts, row in frame.iterrows():
             bars.append({
@@ -105,7 +107,7 @@ class RealYFinanceClient:
     def fetch_fundamentals(self, symbol: str) -> dict[str, Any]:
         import yfinance as yf
 
-        return dict(yf.Ticker(symbol).get_info(timeout=REQUEST_TIMEOUT_S) or {})
+        return dict(yf.Ticker(symbol).get_info() or {})  # 1.x: no kwargs
 
 
 class FixtureYFinanceClient:
