@@ -9,8 +9,10 @@
  * Field bindings + rendering rules: A4 web-slice-handoff.md §3 +
  * task20-on-demand-registration-spec.md (6 states). */
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import DecisionModal from "@/components/DecisionModal";
 import {
   AnalyzeAccepted,
   AnalyzeFailureReason,
@@ -317,6 +319,8 @@ function DashboardView({
   data: Dashboard; refreshing: boolean; onRefresh: () => void;
 }) {
   const rec = data.recommendation;
+  // Block 5 (S9): "Log decision" modal against THIS immutable snapshot.
+  const [logOpen, setLogOpen] = useState(false);
   // State 6: stale is derivable read-time — snapshot as_of < today (UTC,
   // matching the server's clock). Explicit chip + user-initiated Refresh only.
   const stale =
@@ -409,6 +413,24 @@ function DashboardView({
                 {rec.confidence_pct !== null && ` ${trimPct(rec.confidence_pct)}%`}
               </span>
             )}
+            <Link
+              href={`/backtest?symbol=${encodeURIComponent(data.ticker)}`}
+              className="rounded-lg px-2.5 py-1 text-xs font-semibold"
+              style={{ background: "var(--line-2)", color: "var(--accent)" }}
+              data-testid="link-backtest"
+            >
+              Backtest ›
+            </Link>
+            {/* S9 CTA: annotate the immutable rec — never changes it (FR-50) */}
+            <button
+              type="button"
+              onClick={() => setLogOpen(true)}
+              className="min-h-9 rounded-xl px-3 text-xs font-semibold text-white"
+              style={{ background: "var(--accent)" }}
+              data-testid="btn-log-decision"
+            >
+              ＋ Log decision
+            </button>
           </div>
         </div>
 
@@ -488,16 +510,26 @@ function DashboardView({
         )}
       </section>
 
-      {/* lens cards */}
+      {/* lens cards — each links to its S3–S6 detail page */}
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {MODULE_ORDER.map((m) => (
           <LensCard
             key={m}
             entry={rec.per_module_breakdown.find((b) => b.module === m)}
             module={m}
+            ticker={data.ticker}
           />
         ))}
       </section>
+
+      {logOpen && data.rec_date && (
+        <DecisionModal
+          ticker={data.ticker}
+          recDate={data.rec_date}
+          context={`${CALL_LABELS[rec.composite_call]} call, as of ${data.rec_date}`}
+          onClose={() => setLogOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -540,16 +572,22 @@ function TargetCell({
 }
 
 function LensCard({
-  entry, module,
+  entry, module, ticker,
 }: {
-  entry: PerModuleBreakdown | undefined; module: ModuleName;
+  entry: PerModuleBreakdown | undefined; module: ModuleName; ticker: string;
 }) {
   const unavailable = !entry || entry.status === "unavailable";
   const renormalised =
     entry && entry.status === "ok" &&
     Math.abs(entry.weight_effective - entry.weight_assigned) > 1e-9;
   return (
-    <div className="card p-4" data-testid={`lens-${module}`}>
+    // Block 4: the whole card routes to the lens-detail page (S3–S6).
+    <Link
+      href={`/lens/${module}?symbol=${encodeURIComponent(ticker)}`}
+      className="card block p-4"
+      data-testid={`lens-${module}`}
+      aria-label={`${MODULE_LABELS[module]} details for ${ticker}`}
+    >
       <div className="flex items-center justify-between">
         <span className="text-xs font-semibold">{MODULE_LABELS[module]}</span>
         {unavailable && (
@@ -585,7 +623,17 @@ function LensCard({
           {unavailable && " → 0 effective"}
         </div>
       )}
-    </div>
+      {/* The honest WHY behind an unavailable pill (e.g. chip: "13F baseline
+          captured — direction available next quarter") — server-authored
+          subfields_note rendered verbatim, replacing a bare unavailable. */}
+      {unavailable && entry?.subfields_note && (
+        <p className="mt-2 rounded-lg px-2 py-1.5 text-[10.5px]"
+          style={{ background: "var(--amber-bg)", color: "var(--amber)" }}
+          data-testid={`lens-${module}-why`}>
+          {entry.subfields_note}
+        </p>
+      )}
+    </Link>
   );
 }
 

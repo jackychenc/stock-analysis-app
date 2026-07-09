@@ -11,6 +11,11 @@ export interface PerModuleBreakdown {
   weight_assigned: number;
   weight_effective: number;
   status: ModuleStatus;
+  /** v1.2.6 §9 intra-module completeness — distinct from availability. */
+  subfields_complete?: boolean;
+  /** The honest WHY (e.g. chip "13F baseline captured — direction available
+   * next quarter"). Rendered verbatim; never synthesized client-side. */
+  subfields_note?: string | null;
 }
 
 export interface TargetPrice {
@@ -52,6 +57,126 @@ export interface Dashboard {
   next_refresh_at: string | null;
   disclaimer: string;
   disclaimer_version: string;
+}
+
+/* ---- Task #14 blocks 2–5: backtest, config, lens detail, decision log ---- */
+
+export type WindowMonths = 3 | 6 | 12;
+export const WINDOW_OPTIONS: WindowMonths[] = [3, 6, 12];
+
+/** GET /stocks/{t}/backtest — contract §10. Accuracies are 0..1 fractions,
+ * split by completeness segment and NEVER blended; estimated_return is mean
+ * benchmark-relative excess in percentage points over full+partial days.
+ * NOTE: the payload does NOT carry sample_size (BacktestResult contract). */
+export interface BacktestResult {
+  window_months: WindowMonths;
+  rolling_accuracy_full: number | null;
+  rolling_accuracy_partial: number | null;
+  estimated_return: number | null;
+  benchmark: string;
+  insufficient_history: boolean;
+  methodology_version: string;
+  disclaimer: string;
+  disclaimer_version: string;
+}
+
+/** GET/PUT /config/weights. */
+export interface ModuleWeights {
+  technical: number;
+  fundamental: number;
+  chip: number;
+  news: number;
+}
+
+export interface WeightConfig {
+  module_weights: ModuleWeights;
+  horizon_months: WindowMonths;
+}
+
+/** GET /stocks/{t}/technical|fundamentals|chip|news — base lens envelope;
+ * series rows are per-lens shapes (below). */
+export interface ModuleDetail {
+  module: string;
+  status: ModuleStatus;
+  signal_score: number | null;
+  as_of: string | null;
+  series: Record<string, unknown>[];
+}
+
+export interface TechnicalBar {
+  date: string;
+  open?: number | null;
+  high?: number | null;
+  low?: number | null;
+  close?: number | null;
+  volume?: number | null;
+  ma20?: number | null;
+  ma60?: number | null;
+  rsi14?: number | null;
+  macd?: number | null;
+  macd_signal?: number | null;
+  macd_hist?: number | null;
+}
+
+export interface FundamentalRow {
+  as_of: string;
+  pe: number | null;
+  pb: number | null;
+  ev_ebitda: number | null;
+  revenue: number | null;
+  eps: number | null;
+  gross_margin: number | null;
+  op_margin: number | null;
+  net_margin: number | null;
+}
+
+export interface ChipTwRow {
+  trade_date: string;
+  foreign_net: number | null;
+  investment_trust_net: number | null;
+  dealer_net: number | null;
+  margin_balance: number | null;
+  block_trade_volume: number | null;
+  score: number | null;
+}
+
+export interface ChipUsRow {
+  quarter: string;
+  total_shares: number;
+  filer_count: number;
+}
+
+export interface NewsItem {
+  published_at: string;
+  headline: string;
+  url: string;
+  source_name: string;
+  sentiment: number | null;
+}
+
+/* ---- Decision log (FR-49/FR-50) ---- */
+
+export type Decision = "followed" | "ignored" | "partial";
+
+export const DECISION_LABELS: Record<Decision, string> = {
+  followed: "Followed",
+  ignored: "Ignored",
+  partial: "Partial",
+};
+
+/** POST /recommendations/log/{rec_date}/annotate?ticker=… body. */
+export interface DecisionAnnotation {
+  decision: Decision;
+  transaction_price?: number | null;
+  notes?: string | null;
+}
+
+/** GET /recommendations/log entry — the immutable rec plus the latest
+ * append-only annotation (FR-50: annotations never mutate the rec). */
+export interface RecommendationLogEntry extends Recommendation {
+  ticker: string;
+  rec_date: string;
+  annotation: DecisionAnnotation | null;
 }
 
 /* ---- On-demand analysis (task #20/#22, ADR-009 job polling) ------------- */
@@ -137,4 +262,18 @@ export const CALL_RENDER: Record<
 
 export function fmtSigned(n: number, digits = 2): string {
   return `${n >= 0 ? "+" : ""}${n.toFixed(digits)}`;
+}
+
+/** Nullable metric render rule (S3–S6): "—" for absent-but-missing-flagged;
+ * never a fabricated value. */
+export function fmtNum(v: number | null | undefined, digits = 2): string {
+  return v == null ? "—" : v.toFixed(digits);
+}
+
+/** Compact large figures (revenue, share counts) with tabular honesty. */
+export function fmtCompact(v: number | null | undefined): string {
+  if (v == null) return "—";
+  return new Intl.NumberFormat("en", {
+    notation: "compact", maximumFractionDigits: 2,
+  }).format(v);
 }
